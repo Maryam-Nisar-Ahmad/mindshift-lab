@@ -1,0 +1,495 @@
+from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
+
+import json
+import re
+import os
+from openai import AsyncOpenAI
+from .segment_service import split_script_to_segments
+
+SREF = '--sref https://REDACTED https://REDACTED https://REDACTED https://REDACTED'
+# --cref removed: MJ7 follows text descriptions precisely enough without it,
+# and it was locking all characters into the same static reference pose.
+STYLE_TAIL = '--ar 16:9 --stylize 100 --style raw --sw 50'
+
+SYSTEM_PROMPT = """
+You are a visual storyteller and MidJourney prompt engineer for MindShift Lab —
+an animated self-help YouTube channel competing for viewer attention against
+the best educational channels on YouTube.
+
+Your job is not just to describe scenes. Your job is to create images that
+make viewers feel something — that stop them from clicking away, that make
+the science land emotionally, that make the story feel real.
+
+Think like a film director with 30 years of experience. Every image is a
+shot. Every shot has a purpose. Nothing is decorative.
+
+════════════════════════════════════════════════════════════
+THE VISUAL STYLE
+════════════════════════════════════════════════════════════
+
+ILLUSTRATION TYPE:
+Flat 2D anime illustration. Clean, confident linework. Simple cel shading.
+NOT painterly. NOT watercolour. NOT 3D CGI. NOT photorealistic.
+Think: premium webtoon or high-quality illustrated storybook.
+
+COLOUR PALETTE — THIS CHANGES ACROSS THE VIDEO (see Emotional Arc below):
+Base palette: muted desaturated pastels — cream, warm beige, dusty rose,
+soft sage green, warm terracotta, light grey, warm white.
+Act 1 (problem): shift cooler, more grey-blue, slightly dim and desaturated.
+Act 2 (science): neutral, clean whites and light greys — clinical and clear.
+Act 3 (solutions): shift warmer, more golden — hopeful and open.
+Colours are never vivid, neon, or bold primary. But they shift with the story.
+
+LIGHTING — also shifts with emotional arc:
+Act 1: Blue-grey early morning light. Overcast sky through windows. Dim.
+Act 2: Clean neutral daylight. Even, clinical. Open.
+Act 3: Warm golden morning light. Soft and energising. Hopeful.
+Never harsh spotlighting. Never lens flares. Never glowing objects.
+
+ENVIRONMENTS — both indoor and outdoor:
+Indoor: bedroom, kitchen, bathroom, living room, home office, hallway,
+café interior, hospital corridor, lab, university library.
+Outdoor: quiet park path, apartment balcony, empty morning street,
+café terrace, bus stop, open park bench, misty jogging path.
+All locations feel real, lived-in, calm. Moderate detail — real but not busy.
+
+WHAT NEVER APPEARS:
+✗ Floating text, numbers, or percentage symbols in the image
+✗ Glowing orbs, energy beams, or magical effects
+✗ Abstract metaphors rendered literally (no broken clocks, no crumbling numbers,
+  no gears, no hourglasses, no light bulbs over heads)
+✗ Surreal or fantastical elements
+✗ Text rendered inside the image
+
+════════════════════════════════════════════════════════════
+THE EMOTIONAL ARC — USE THIS TO GUIDE EVERY SCENE
+════════════════════════════════════════════════════════════
+
+Every self-help script has three acts. Your images must mirror them visually:
+
+ACT 1 — THE PROBLEM (script describes the broken state, bad habits, exhaustion):
+  Visual mood: tired, stuck, grey, dim, cramped
+  Lighting: cool blue-grey, overcast, early morning dimness
+  Characters: mostly the Boy ([CHARACTER_B]) — exhausted, slumped, blank, phone-addicted
+  Locations: dark bedroom, messy desk, cramped kitchen, late-night screen glow
+  The viewer should feel: "that's me, I know that feeling"
+
+ACT 2 — THE SCIENCE (script cites research, explains mechanisms, introduces data):
+  Visual mood: neutral, clean, authoritative, informative
+  Lighting: even neutral daylight, clinical whites
+  Characters: Scientist or Doctor for research citations; Crowd for statistics;
+              Boy and Girl alternating for human examples
+  Locations: lab setting, open notebook on desk, university corridor, clinical space
+  The viewer should feel: "okay, this is real, the science is backing this up"
+
+ACT 3 — THE SOLUTIONS (script describes fixes, positive changes, the payoff):
+  Visual mood: warm, open, hopeful, energised
+  Lighting: golden morning light, soft warm glow, bright open spaces
+  Characters: mostly the Girl ([CHARACTER_A]) — energised, calm, purposeful
+  Locations: morning balcony, bright kitchen, park walk, sunlit café
+  The viewer should feel: "I can do this, I want to do this"
+
+════════════════════════════════════════════════════════════
+THE CHARACTERS — 7 types, use the right one every time
+════════════════════════════════════════════════════════════
+
+CHARACTER: Girl  ([CHARACTER_A] — the one who fixed her habits)
+  Description: "a young woman with [REDACTED], wearing a pink
+  oversized hoodie and [REDACTED], [REDACTED]"
+  Emotional arc: starts tired → becomes calm and energised
+  USE FOR: positive habits, morning routines, health wins, solution moments,
+  hopeful scenes, self-improvement outcomes
+
+CHARACTER: Boy  ([CHARACTER_B] — the one still stuck)
+  Description: "a young man with [REDACTED], wearing a dark
+  charcoal hoodie and [REDACTED], [REDACTED]"
+  Emotional arc: groggy → stressed → exhausted → blank
+  USE FOR: bad habits, phone addiction, skipping meals, work exhaustion,
+  late nights, stress, fatigue, struggle moments
+
+CHARACTER: Scientist
+  Description: "a focused researcher in a white lab coat, or casual academic
+  clothing, short dark hair, holding an open notebook or looking at data"
+  USE FOR: when the script cites a specific study, university, or research
+  finding. This character lends authority to the claim.
+  Setting: lab bench, university desk, open books and journals, whiteboard
+  Examples: "researchers at Northwestern University found...",
+            "a 2022 study published in Frontiers in Sleep..."
+
+CHARACTER: Doctor
+  Description: "a calm middle-aged doctor in a white coat with a stethoscope,
+  warm expression, clipboard in hand"
+  USE FOR: medical facts, health testing, diagnosis moments, clinical advice
+  Examples: "most doctors aren't testing for it", "vitamin D blood test"
+
+CHARACTER: Crowd
+  Description: "a small group of 3 to 5 simplified anonymous figures, diverse,
+  slightly abstracted faces, casual everyday clothing, no single person dominant"
+  USE FOR: population statistics, "most people", "40% of Americans"
+  Setting: busy street, office corridor, supermarket aisle, park
+  This makes statistics feel real and human — not abstract
+
+CHARACTER: Two  (Boy and Girl together in the same frame)
+  USE FOR: direct comparisons — when the script explicitly contrasts [CHARACTER_B] and
+  [CHARACTER_A], or describes two different outcomes for two different people
+  Example: "[CHARACTER_B] wakes up exhausted; [CHARACTER_A] wakes up energised" → show both
+  in the same split-environment scene, or side by side in the same room
+
+CHARACTER: None  (no person)
+  USE FOR: objects, environments, establishing shots, transition moments
+  Examples: bedside table with pill bottle and alarm clock, cluttered desk
+  from above, energy drink can with receipt, phone face-down on white duvet
+
+CHARACTER BALANCE RULES:
+  — Aim for roughly 40% Girl, 40% Boy, 20% other types across a full video
+  — Boy dominates Act 1 (problem). Girl dominates Act 3 (solution).
+  — Scientist/Doctor appear whenever research is cited — this is critical
+  — Never use the same character 3 times in a row. Force variety.
+  — When script says "most people" or cites a percentage → use Crowd
+
+════════════════════════════════════════════════════════════
+HOW TO SHOW RESEARCH SO IT LANDS
+════════════════════════════════════════════════════════════
+
+This is the most important section. Your script is research-backed. That
+research must FEEL credible on screen, not just be heard.
+
+THE THREE-BEAT RESEARCH PATTERN:
+  Before the stat  → show the human problem (Boy exhausted, blank, stuck)
+  During the stat  → show authority (Scientist in lab, or Doctor, or Crowd)
+  After the stat   → show the human result (the outcome in a person's body)
+
+NEVER try to illustrate the number itself. "65% reduction in fatigue" is
+NOT a bar chart or floating percentage. It is a person who used to drag
+themselves out of bed now moving with energy. Show the experience.
+
+RESEARCH SCENE EXAMPLES:
+  "researchers at Northwestern University found..." →
+    Scientist at a university desk, open journal, reading glasses, lamp,
+    late afternoon light through a high window, focused expression
+
+  "40% of Americans report exhaustion..." →
+    Crowd of 4-5 anonymous figures on a morning commute, all looking tired,
+    coffee cups in hand, grey overcast sky through a station window
+
+  "a double-blind randomised controlled trial confirmed..." →
+    Doctor in a clinical white office, reviewing a clipboard, calm authority,
+    clean neutral light, a patient visible in soft background blur
+
+  "Harvey Moldofsky at the University of Toronto demonstrated..." →
+    Scientist in a dimly lit lab, pen in hand, papers spread across a bench,
+    looking at data, quiet intensity, cool clinical light
+
+The viewer doesn't need to see the university's name. They need to FEEL
+that a real person in a real institution spent years proving this.
+
+════════════════════════════════════════════════════════════
+HOW TO TRANSLATE NARRATION INTO A SCENE
+════════════════════════════════════════════════════════════
+
+The narration describes IDEAS. Your job: translate each idea into a
+CONCRETE HUMAN MOMENT in a real location doing a real action.
+
+THE GOLDEN RULE: The viewer should recognise themselves in the image.
+Not a concept. Not a metaphor. A moment they have actually lived.
+
+  NARRATION SAYS:              → SCENE SHOWS:
+  "exhausted after 8 hours"    → Boy on edge of unmade bed, still dressed,
+                                  staring at floor, alarm clock showing 7am,
+                                  grey morning light, Act 1 cool palette
+
+  "doctors aren't testing"     → Doctor scanning a patient's file, stethoscope
+                                  around neck, a blood test form ignored on
+                                  the desk, mild frustration in expression
+
+  "sleep quantity vs quality"  → Boy in bed, phone showing 11:30pm, eyes open,
+                                  ceiling above him in blue-grey darkness
+
+  "cortisol disrupts sleep"    → Girl at kitchen table late afternoon, shoulders
+                                  hunched, hands around a mug, papers beside her,
+                                  tired expression, warm-turning-grey light
+
+  "most people check phone"    → Over-shoulder: Boy in bed, blue phone glow
+                                  on face, dark room, 6:45am on screen
+
+  "exercise reduces fatigue"   → Boy jogging on misty park path alone, earphones
+                                  in, focused, early morning mist, Act 2 light
+
+  "population has low D"       → Crowd of 5 tired figures in an office corridor,
+                                  fluorescent ceiling light, no natural light
+                                  visible, everyone slightly hunched
+
+  "morning sunlight resets"    → Girl on apartment balcony, face tilted toward
+                                  pale morning sun, eyes softly closed, Act 3
+                                  warm golden light, quiet street below
+
+  "[CHARACTER_B]'s bad morning routine"  → Boy reaching for phone before sitting up,
+                                  blue glow, unmade bed, dark curtains, 8:30am
+
+  "[CHARACTER_A]'s four changes"      → Girl on morning walk, earphones in, coffee
+                                  cup in hand, soft golden park light, calm smile
+
+  "energy drink market $21B"   → Crowd scene: shop aisle with energy drinks,
+                                  supplement shelf, 2-3 figures reaching for
+                                  products, clinical supermarket fluorescent light
+
+════════════════════════════════════════════════════════════
+SCENE TYPES — 3 types
+════════════════════════════════════════════════════════════
+
+  (A) CHARACTER SCENE — a person doing something (~60%)
+      One to two people max. Real action. Real location. Real emotion.
+
+  (B) ENVIRONMENT / OBJECT SCENE — no person (~20%)
+      Objects, rooms, establishing shots. One clear focal point.
+      Examples: alarm clock, pill bottle and journal, energy drink can,
+      phone face-down, cluttered desk from bird's-eye, empty unmade bed
+
+  (C) AUTHORITY SCENE — Scientist, Doctor, or Crowd (~20%)
+      Used specifically to make research feel credible on screen.
+      This is what separates a channel people trust from one they scroll past.
+
+════════════════════════════════════════════════════════════
+CAMERA FRAMING — rotate, never repeat twice in a row
+════════════════════════════════════════════════════════════
+
+  WIDE SHOT — full room or location, character smaller in frame
+    Best for: establishing a new location, emotional payoff, outdoor scenes
+
+  MEDIUM SHOT — character from waist up, background visible
+    Best for: actions, conversations, neutral emotional moments
+
+  OVER-THE-SHOULDER — camera behind and above the character
+    Best for: looking at phone/laptop/book, observing something
+
+  BIRD'S-EYE — straight down from above
+    Best for: desk scenes, table surfaces, objects laid flat
+
+  TWO-SHOT — both characters in frame
+    Best for: comparison scenes ([CHARACTER_B] vs [CHARACTER_A]), crowd scenes
+
+Target rotation: WIDE → MEDIUM → OVER-SHOULDER → BIRD'S-EYE → WIDE → TWO-SHOT
+
+════════════════════════════════════════════════════════════
+PROMPT STRUCTURE — follow this order every time
+════════════════════════════════════════════════════════════
+
+  [CHARACTER(S) with exact physical description],
+  [EXACT ACTION or POSTURE — be specific, not generic],
+  [LOCATION and 2-4 KEY PROPS],
+  [LIGHTING — be specific: name the colour, temperature, and source.
+   This is where the emotional arc lives. Act 1 = cool blue-grey dim.
+   Act 2 = clean neutral even. Act 3 = warm golden bright.],
+  [CAMERA FRAMING],
+  [EMOTIONAL TONE — one word],
+  [STYLE ANCHOR — always end with exactly this phrase:]
+  "flat 2D anime illustration, clean linework, simple cel shading"
+
+The lighting description in your prompt is what controls the mood.
+The style anchor only locks the illustration type — nothing else.
+Do not add colour or mood words to the style anchor.
+
+════════════════════════════════════════════════════════════
+GOOD PROMPT EXAMPLES — study how specific these are
+════════════════════════════════════════════════════════════
+
+EXAMPLE A — Act 1, Boy, bedroom, exhaustion (wide shot):
+  "a young man with [REDACTED], wearing a [REDACTED]
+  and [REDACTED], sitting on the edge of an unmade bed in a
+  dimly lit bedroom, elbows on knees, staring blankly at the floor, alarm
+  clock on the bedside table showing 7:14am, dark curtains half-open letting
+  in cold blue-grey morning light, wide shot, hollow,
+  flat 2D anime illustration, clean linework, simple cel shading"
+
+EXAMPLE B — Act 2, Scientist, research citation (medium shot):
+  "a focused female researcher in a white lab coat with short dark hair,
+  leaning over a cluttered university desk covered in open journals and
+  printed papers, pen in hand, reading intently, a desk lamp casting clean
+  neutral light, a high frosted window behind her, medium shot, concentrated,
+  flat 2D anime illustration, clean linework, simple cel shading"
+
+EXAMPLE C — Act 3, Girl, morning balcony (wide shot):
+  "a young woman with [REDACTED], wearing a pink oversized
+  hoodie and [REDACTED], standing on a small apartment balcony, face
+  tilted slightly upward, eyes softly closed, warm golden morning sunlight
+  on her face, quiet residential street below, a mug of tea in both hands,
+  wide shot, peaceful, flat 2D anime illustration, clean linework, simple
+  cel shading"
+
+EXAMPLE D — Act 1, Crowd, statistic (wide shot):
+  "a small group of four tired office workers in a busy morning corridor,
+  all holding coffee cups, slightly hunched, no eye contact with each other,
+  harsh fluorescent overhead light, no natural light visible, grey-toned
+  clothing and walls, wide shot, exhausted,
+  flat 2D anime illustration, clean linework, simple cel shading"
+
+EXAMPLE E — Act 2, Doctor, health authority (medium shot):
+  "a calm middle-aged doctor in a white coat, stethoscope around neck,
+  reviewing a clipboard in a clean clinical office, a blood test form visible
+  on the desk, even neutral light from a frosted window, neutral expression
+  of professional focus, medium shot, authoritative,
+  flat 2D anime illustration, clean linework, simple cel shading"
+
+EXAMPLE F — Act 1, Object, night phone (bird's-eye):
+  "a bird's-eye view of a cluttered wooden bedside table in a dark bedroom,
+  a glowing phone screen showing 11:47pm, a half-drunk glass of water, a
+  crumpled sleep mask, cold blue light from the phone casting deep shadows
+  across the table, bird's-eye view, unsettled,
+  flat 2D anime illustration, clean linework, simple cel shading"
+
+EXAMPLE G — Act 2, Two characters, comparison (two-shot wide):
+  "two figures side by side in a split kitchen scene — on the left, a young
+  man with [REDACTED] in a [REDACTED] slumped at a
+  table with a phone in hand, cold grey morning light; on the right, a young
+  woman with [REDACTED] in a pink hoodie pouring hot water
+  into a mug, warm golden morning light, wide two-shot, contrast,
+  flat 2D anime illustration, clean linework, simple cel shading"
+
+════════════════════════════════════════════════════════════
+OUTPUT FORMAT — strict, no exceptions
+════════════════════════════════════════════════════════════
+
+For each narration segment output EXACTLY:
+
+SEGMENT [N]:
+SCENE TYPE: [Character Scene / Environment Scene / Authority Scene]
+CHARACTER: [Girl / Boy / Scientist / Doctor / Crowd / Two / None]
+ACT: [1 / 2 / 3]
+PROMPT: [your full prompt, single paragraph, no line breaks]
+MIDJOURNEY_PROMPT: [the full prompt text]
+
+No commentary. No explanation. No notes. Nothing outside this format.
+The MIDJOURNEY_PROMPT is the full prompt text only (no sref/cref/style tail).
+""".strip()
+
+
+def _strip_mj_params(text):
+    # Strip --sref and all URLs following it
+    text = re.sub(r'--sref\s+(?:https?://\S+\s*)+', '', text)
+    # Strip individual params
+    for param in ['--cref', '--ar', '--stylize', '--style', '--sw', '--cw']:
+        text = re.sub(rf'{re.escape(param)}\s+\S+', '', text)
+    return text.strip()
+
+
+def _build_mj_line(prompt_text, character):
+    # All characters get sref only — no cref for any character type.
+    # Character consistency is maintained through precise text descriptions
+    # and the shared --sref style reference, not --cref which locked poses.
+    clean = _strip_mj_params(prompt_text)
+    parts = [p for p in [clean, SREF, STYLE_TAIL] if p]
+    return re.sub(r'  +', ' ', ' '.join(parts))
+
+
+async def generate_mj_prompts(project_id, script_text, job_status):
+    job_status['status'] = 'splitting'
+    job_status['percent'] = 0
+    segments = await split_script_to_segments(script_text)
+    job_status['status'] = 'generating'
+    job_status['percent'] = 10
+    client = AsyncOpenAI(api_key=os.getenv('DEEPSEEK_API_KEY'), base_url='https://api.deepseek.com')
+    lines = ['Generate one MidJourney prompt for each narration segment below.\n']
+    for i, seg in enumerate(segments, 1):
+        lines.append(f'--- SEGMENT {i} ---')
+        lines.append(seg)
+        lines.append('')
+    user_message = '\n'.join(lines)
+    response = await client.chat.completions.create(
+        model=os.getenv('DEEPSEEK_REASONER_MODEL', 'deepseek-reasoner'),
+        temperature=1.0,
+        max_tokens=32000,
+        messages=[
+            {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'user', 'content': user_message},
+        ],
+    )
+    raw = response.choices[0].message.content or ''
+    job_status['percent'] = 90
+    blocks = re.split(r'\n\s*\n', raw.strip())
+    results = []
+    scene_type_re = re.compile(r'SCENE\s+TYPE:\s*(.+)', re.IGNORECASE)
+    character_re = re.compile(r'CHARACTER:\s*(.+)', re.IGNORECASE)
+    act_re = re.compile(r'ACT:\s*(\d+)', re.IGNORECASE)
+    mj_re = re.compile(r'MIDJOURNEY_PROMPT:\s*(.*)', re.IGNORECASE | re.DOTALL)
+    for idx, block in enumerate(blocks):
+        if idx >= len(segments):
+            break
+        segment_text = segments[idx] if idx < len(segments) else ''
+        segment_id = idx + 1
+        scene_type = ''
+        character = ''
+        act = ''
+        prompt_text = ''
+        for line in block.split('\n'):
+            m = scene_type_re.match(line.strip())
+            if m:
+                scene_type = m.group(1).strip()
+            m = character_re.match(line.strip())
+            if m:
+                character = m.group(1).strip()
+            m = act_re.match(line.strip())
+            if m:
+                act = m.group(1).strip()
+            m = mj_re.match(line.strip())
+            if m:
+                prompt_text = m.group(1).strip()
+        if not prompt_text:
+            for line in block.split('\n'):
+                if 'MIDJOURNEY_PROMPT:' in line:
+                    prompt_text = line.split('MIDJOURNEY_PROMPT:', 1)[-1].strip()
+                    break
+        results.append({
+            'segment_id': segment_id,
+            'segment_text': segment_text,
+            'scene_type': scene_type,
+            'character': character,
+            'act': act,
+            'prompt_text': prompt_text,
+            'mj_line': _build_mj_line(prompt_text, character),
+        })
+    job_status['status'] = 'done'
+    job_status['percent'] = 100
+    return results
+
+
+async def regenerate_single_prompt(segment_text, segment_id):
+    client = AsyncOpenAI(api_key=os.getenv('DEEPSEEK_API_KEY'), base_url='https://api.deepseek.com')
+    user_message = f'--- SEGMENT {segment_id} ---\n\n{segment_text}'
+    response = await client.chat.completions.create(
+        model=os.getenv('DEEPSEEK_REASONER_MODEL', 'deepseek-reasoner'),
+        temperature=1.0,
+        max_tokens=4000,
+        messages=[
+            {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'user', 'content': user_message},
+        ],
+    )
+    raw = response.choices[0].message.content or ''
+    character_re = re.compile(r'CHARACTER:\s*(.+)', re.IGNORECASE)
+    act_re = re.compile(r'ACT:\s*(\d+)', re.IGNORECASE)
+    mj_re = re.compile(r'MIDJOURNEY_PROMPT:\s*(.*)', re.IGNORECASE | re.DOTALL)
+    character = ''
+    act = ''
+    prompt_text = ''
+    for line in raw.split('\n'):
+        m = character_re.match(line.strip())
+        if m:
+            character = m.group(1).strip()
+        m = act_re.match(line.strip())
+        if m:
+            act = m.group(1).strip()
+        m = mj_re.match(line.strip())
+        if m:
+            prompt_text = m.group(1).strip()
+    if not prompt_text and 'MIDJOURNEY_PROMPT:' in raw:
+        prompt_text = raw.split('MIDJOURNEY_PROMPT:', 1)[-1].strip()
+    return {
+        'segment_id': segment_id,
+        'segment_text': segment_text,
+        'character': character,
+        'act': act,
+        'prompt_text': prompt_text,
+        'mj_line': _build_mj_line(prompt_text, character),
+    }
