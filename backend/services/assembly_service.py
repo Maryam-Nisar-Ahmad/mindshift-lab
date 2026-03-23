@@ -1,6 +1,15 @@
 import json
 from pathlib import Path
+import re
 from rapidfuzz import fuzz
+
+
+def _normalize(text: str) -> str:
+    """Lowercase and strip punctuation for fuzzy comparison."""
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 def map_segments_to_timestamps(project_id, project_dir) -> list:
@@ -33,18 +42,19 @@ def map_segments_to_timestamps(project_id, project_dir) -> list:
         matched_probe_size = 0
 
         if seg_words and words:
-            for probe_size, threshold in [(6, 75), (4, 70), (3, 65), (2, 60)]:
+            for probe_size, threshold in [(6, 75), (4, 70), (3, 65)]:
                 if len(seg_words) < probe_size or len(words) < probe_size:
                     continue
 
                 probe_str = " ".join(seg_words[:probe_size])
+                probe_norm = _normalize(probe_str)
                 current_best_ratio = 0.0
                 current_best_pos = last_matched_pos
 
                 for i in range(last_matched_pos, len(words) - probe_size + 1):
                     window_words = [words[i + j]["word"] for j in range(probe_size)]
                     window_str = " ".join(window_words)
-                    ratio = fuzz.ratio(probe_str, window_str)
+                    ratio = fuzz.ratio(probe_norm, _normalize(window_str))
                     if ratio > current_best_ratio:
                         current_best_ratio = ratio
                         current_best_pos = i
@@ -71,6 +81,11 @@ def map_segments_to_timestamps(project_id, project_dir) -> list:
             total_segments = len(mj_data)
             current_index = len(result)
             estimated_start = (current_index / total_segments) * total_duration if total_segments else 0.0
+            # Ensure monotonic ordering: unmatched segment must start 
+            # at or after the previous segment's start time
+            if result:
+                prev_start = result[-1]["start"]
+                estimated_start = max(estimated_start, prev_start + 0.5)
             start_time = estimated_start
 
         result.append({
