@@ -25,30 +25,53 @@ def map_segments_to_timestamps(project_id, project_dir) -> list:
         segment_id = seg.get("segment_id", 0)
         segment_text = seg.get("segment_text", "")
         seg_words = segment_text.split()
-        probe = " ".join(seg_words[:6]) if seg_words else ""
+        probe_str = ""
 
         best_ratio = 0.0
         best_pos = 0
+        matched = False
+        matched_probe_size = 0
 
-        if probe and words:
-            for i in range(last_matched_pos, len(words) - 5):
-                window_words = [words[i + j]["word"] for j in range(6)]
-                window_str = " ".join(window_words)
-                ratio = fuzz.ratio(probe, window_str)
-                if ratio > best_ratio:
-                    best_ratio = ratio
-                    best_pos = i
-                if ratio >= 90:
+        if seg_words and words:
+            for probe_size, threshold in [(6, 75), (4, 70), (3, 65), (2, 60)]:
+                if len(seg_words) < probe_size or len(words) < probe_size:
+                    continue
+
+                probe_str = " ".join(seg_words[:probe_size])
+                current_best_ratio = 0.0
+                current_best_pos = last_matched_pos
+
+                for i in range(last_matched_pos, len(words) - probe_size + 1):
+                    window_words = [words[i + j]["word"] for j in range(probe_size)]
+                    window_str = " ".join(window_words)
+                    ratio = fuzz.ratio(probe_str, window_str)
+                    if ratio > current_best_ratio:
+                        current_best_ratio = ratio
+                        current_best_pos = i
+                    if ratio >= 90:
+                        break
+
+                if current_best_ratio > best_ratio:
+                    best_ratio = current_best_ratio
+                    best_pos = current_best_pos
+
+                if current_best_ratio >= threshold:
+                    matched = True
+                    matched_probe_size = probe_size
+                    best_ratio = current_best_ratio
+                    best_pos = current_best_pos
                     break
 
-        matched = best_ratio >= 75
         if matched:
             start_time = words[best_pos]["start"]
-            last_matched_pos = best_pos + 6
+            last_matched_pos = best_pos + matched_probe_size
             if last_matched_pos > len(words):
                 last_matched_pos = len(words)
         else:
-            start_time = result[-1]["end"] if result else 0.0
+            total_segments = len(mj_data)
+            current_index = len(result)
+            estimated_start = (current_index / total_segments) * total_duration if total_segments else 0.0
+            start_time = estimated_start
 
         result.append({
             "segment_id": segment_id,
@@ -57,7 +80,7 @@ def map_segments_to_timestamps(project_id, project_dir) -> list:
             "end": None,
             "text": segment_text,
             "matched": matched,
-            "match_ratio": round(best_ratio, 2) if probe else 0.0,
+            "match_ratio": round(best_ratio, 2) if probe_str else 0.0,
         })
 
     for i in range(len(result)):
