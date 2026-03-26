@@ -55,6 +55,7 @@ export default function ProjectPage() {
   const [step7ScriptText, setStep7ScriptText] = useState<string>('');
   const [step7Combined, setStep7Combined] = useState<string>('');
   const [step7OutputText, setStep7OutputText] = useState('');
+  const [cleanedScript, setCleanedScript] = useState<string>('');
   const [step7Copied, setStep7Copied] = useState(false);
   const [thumbnailReviewPrompt, setThumbnailReviewPrompt] = useState('');
   const [step8Description, setStep8Description] = useState('');
@@ -778,7 +779,7 @@ export default function ProjectPage() {
                           onClick={() => {
                             if (!id || !step7OutputText.trim()) return;
                             cleanScript(id, step7OutputText)
-                              .then((r: { cleaned_script?: string }) => { setStep7OutputText(r?.cleaned_script ?? step7OutputText); showToast('Script cleaned', 'success'); })
+                              .then((r: { cleaned_script?: string }) => { setStep7OutputText(r?.cleaned_script ?? step7OutputText); setCleanedScript(r?.cleaned_script ?? ''); showToast('Script cleaned successfully with AI', 'success'); })
                               .catch((err) => showToast(err instanceof Error ? err.message : 'Clean failed', 'error'));
                           }}
                         >
@@ -803,44 +804,70 @@ export default function ProjectPage() {
                   )}
                   {num === 8 && (
                     <>
-                      <h2 className="mt-4 text-lg font-semibold text-white">Final Review</h2>
-                      <p className="mt-3 text-sm font-medium text-white/90">Video Title</p>
-                      <div className="mt-1 rounded-lg p-4 border-l-4 max-h-32 overflow-y-auto font-mono text-sm" style={{ backgroundColor: '#0D1A12', borderLeftColor: '#3DBA6F', color: '#F0F4F0' }}>
-                        <pre className="whitespace-pre-wrap">{project?.title ?? '—'}</pre>
+                      {/* Final Review - Step 8 */}
+                      <div className="space-y-6">
+                        <h3 className="text-lg font-semibold text-white">Final Review</h3>
+
+                        {/* 1. Video Title */}
+                        <div>
+                          <label className="block text-sm text-zinc-400 mb-1">Video Title</label>
+                          <pre className="bg-zinc-900 p-4 rounded text-white whitespace-pre-wrap">{project?.title ?? '—'}</pre>
+                        </div>
+
+                        {/* 2. SEO Description */}
+                        <div>
+                          <label className="block text-sm text-zinc-400 mb-1">SEO Description</label>
+                          <textarea
+                            value={step8Description}
+                            onChange={(e) => setStep8Description(e.target.value)}
+                            className="w-full h-32 bg-zinc-900 text-white p-4 rounded border border-zinc-700"
+                          />
+                        </div>
+
+                        {/* 3. Tags */}
+                        <div>
+                          <label className="block text-sm text-zinc-400 mb-1">Tags (comma separated)</label>
+                          <input
+                            type="text"
+                            value={step8Tags}
+                            onChange={(e) => setStep8Tags(e.target.value)}
+                            className="w-full bg-zinc-900 text-white p-4 rounded border border-zinc-700"
+                          />
+                        </div>
+
+                        {/* 4. Cleaned Script (new) */}
+                        <div>
+                          <label className="block text-sm text-zinc-400 mb-1">Cleaned Script (from AI)</label>
+                          <pre className="bg-zinc-900 p-4 rounded text-white whitespace-pre-wrap max-h-60 overflow-auto">
+                            {cleanedScript || 'Run "Clean with AI" in Step 7 first'}
+                          </pre>
+                        </div>
+
+                        {/* Exported Video File Path (at the very end) */}
+                        <div className="pt-4 border-t border-zinc-700">
+                          <label className="block text-sm text-zinc-400 mb-1">Exported Video File Path</label>
+                          <div className="bg-zinc-900 p-4 rounded text-emerald-400 font-mono text-sm break-all">
+                            {(project as any)?.exportedVideoPath || (project as any)?.videoUrl || 'Video not exported yet. Click "Export Video" in previous step.'}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!id) return;
+                            saveSeoData(id, { description: step8Description, tags: step8Tags })
+                              .then(() => stepComplete(id, 8))
+                              .then(() => {
+                                fetchProject();
+                                showToast('Final review saved!', 'success');
+                              })
+                              .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'));
+                          }}
+                          className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 rounded font-medium"
+                        >
+                          Save &amp; Complete Project
+                        </button>
                       </div>
-                      <p className="mt-4 text-sm font-medium text-white/90">SEO Description</p>
-                      <textarea
-                        value={step8Description}
-                        onChange={(e) => setStep8Description(e.target.value)}
-                        placeholder="Paste your SEO description here"
-                        className="mt-1 w-full h-40 rounded font-mono text-sm resize-y border focus:border-[#3DBA6F] focus:outline-none"
-                        style={{ backgroundColor: '#0D1A12', borderColor: '#2A4A35', color: '#F0F4F0' }}
-                      />
-                      <p className="mt-3 text-sm font-medium text-white/90">Tags</p>
-                      <input
-                        type="text"
-                        value={step8Tags}
-                        onChange={(e) => setStep8Tags(e.target.value)}
-                        placeholder="tag1, tag2, tag3..."
-                        className="mt-1 w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-white placeholder:text-white/40"
-                      />
-                      <button
-                        type="button"
-                        className="mt-3 rounded px-3 py-1.5 text-sm font-medium text-white"
-                        style={{ backgroundColor: '#3DBA6F' }}
-                        onClick={() => {
-                          if (!id) return;
-                          saveSeoData(id, { description: step8Description, tags: step8Tags })
-                            .then(() => stepComplete(id, 8))
-                            .then(() => {
-                              fetchProject();
-                              showToast('Final review saved!', 'success');
-                            })
-                            .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'));
-                        }}
-                      >
-                        Save &amp; Complete
-                      </button>
                     </>
                   )}
                   {num !== 1 && num !== 2 && num !== 3 && num !== 3.5 && num !== 4 && num !== 4.1 && num !== 4.5 && num !== 5 && num !== 7 && num !== 8 && <div className="h-24 rounded-lg bg-white/5" />}

@@ -98,6 +98,8 @@ export default function EditorPage() {
   const [movingSegmentId, setMovingSegmentId] = useState<number | null>(null);
   const [isSnapping, setIsSnapping] = useState(false);
   const [parkedSegments, setParkedSegments] = useState<Segment[]>([]);
+  const [history, setHistory] = useState<any[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
 
   useEffect(() => {
     if (!id) return;
@@ -129,9 +131,14 @@ export default function EditorPage() {
         }
 
         const duration = finalSegments.length > 0
-          ? Math.max(...finalSegments.map((seg) => seg.end))
+          ? Math.max(...finalSegments.map((seg) => seg.end)) + 1.5
           : 0;
         setTotalDuration(duration);
+        setHistory([]);
+        setHistoryIndex(-1);
+        setTimeout(() => {
+          saveToHistory();
+        }, 0);
       } catch (err) {
         showToast(err instanceof Error ? err.message : 'Request failed', 'error');
       } finally {
@@ -380,6 +387,71 @@ export default function EditorPage() {
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
+  const updateTotalDuration = useCallback(() => {
+    const maxEnd = segments.length > 0
+      ? Math.max(...segments.map((seg) => seg.end))
+      : 0;
+    setTotalDuration(maxEnd + 1.5);
+  }, [segments]);
+
+  // Undo/Redo helpers - Step 7 update
+  const saveToHistory = useCallback(() => {
+    const currentState = {
+      segments: JSON.parse(JSON.stringify(segments)),
+      parkedSegments: JSON.parse(JSON.stringify(parkedSegments)),
+      transitions: JSON.parse(JSON.stringify(transitions)),
+      // We will expand this later for transitions, subtitles, etc.
+    };
+    setHistory((prev) => {
+      const newHistory = prev.slice(0, historyIndex + 1);
+      newHistory.push(currentState);
+      setHistoryIndex(newHistory.length - 1);
+      return newHistory;
+    });
+  }, [segments, parkedSegments, transitions, historyIndex]);
+
+  const performUndo = useCallback(() => {
+    if (historyIndex <= 0) return;
+    const previousState = history[historyIndex - 1];
+    if (!previousState) return;
+
+    setSegments(previousState.segments);
+    setParkedSegments(previousState.parkedSegments || []);
+    setTransitions(previousState.transitions || {});
+    updateTotalDuration();
+
+    setHistoryIndex(prev => prev - 1);
+  }, [history, historyIndex, setSegments, setParkedSegments, setTransitions]);
+
+  const performRedo = useCallback(() => {
+    if (historyIndex >= history.length - 1) return;
+    const nextState = history[historyIndex + 1];
+    if (!nextState) return;
+
+    setSegments(nextState.segments);
+    setParkedSegments(nextState.parkedSegments || []);
+    setTransitions(nextState.transitions || {});
+    updateTotalDuration();
+
+    setHistoryIndex(prev => prev + 1);
+  }, [history, historyIndex, setSegments, setParkedSegments, setTransitions]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          performRedo();
+        } else {
+          performUndo();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [performUndo, performRedo]);
+
   const autoSave = useCallback(() => {
     if (!id) return;
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
@@ -421,14 +493,22 @@ export default function EditorPage() {
   const handleBack = () => router.push(`/project/${id}`);
 
   const buildEditorState = () => ({
-    segments,
+    segments: segments.map((seg, idx, arr) => {
+      if (idx === arr.length - 1) {
+        return { ...seg, end: seg.end + 1.5 };
+      }
+      return seg;
+    }),
+    parkedSegments,
+    transitions,
     subtitles,
     has_subtitles: hasSubtitles,
     font_size: subtitleSettings.font_size,
     alignment: subtitleSettings.position,
-    transitions,
     subtitleSettings,
     canvas_display_width: canvasRef.current ? canvasRef.current.offsetWidth : 1920,
+    totalDuration: totalDuration,
+    end_padding_seconds: 1.5,
   });
 
   const handleExportClick = async () => {
@@ -563,6 +643,15 @@ export default function EditorPage() {
                 body: formData,
               });
               const newUrl = `${process.env.NEXT_PUBLIC_API_URL}/api/projects/${params.id}/files/images/${imageName}?t=${Date.now()}`;
+              saveToHistory();
+              setSegments(prev =>
+                prev.map(s =>
+                  s.segment_id === replacingSegmentId
+                    ? { ...s, image: imageName }
+                    : s
+                )
+              );
+              updateTotalDuration();
               const img = new Image();
               img.src = newUrl;
               img.onload = () => {
@@ -602,11 +691,13 @@ export default function EditorPage() {
                 matched: true,
                 match_ratio: 1,
               };
+              saveToHistory();
               setSegments(prev => {
                 const next = [...prev];
                 next.splice(idx + 1, 0, newSeg);
                 return next;
               });
+              updateTotalDuration();
               const newUrl = `${process.env.NEXT_PUBLIC_API_URL}/api/projects/${params.id}/files/images/${newImageName}?t=${Date.now()}`;
               const img = new Image();
               img.src = newUrl;
@@ -636,17 +727,17 @@ export default function EditorPage() {
           );
           return (
             <div
-              className="px-4 pb-1 flex items-center gap-2 flex-wrap"
+              className="px-4 pb-1 py-2 flex items-center gap-2 flex-wrap bg-black/40 rounded-md"
               style={{ minHeight: '24px' }}
             >
               <span
-                className="text-xs font-medium px-2 py-0.5 rounded"
+                className="text-lg font-medium px-3 py-1 rounded-md"
                 style={{ backgroundColor: '#132419', color: '#3DBA6F' }}
               >
                 Scene {sceneIdx + 1}
               </span>
               {activeSeg.text ? (
-                <span className="text-xs" style={{ color: '#F0F4F0', opacity: 0.85 }}>
+                <span className="text-base" style={{ color: '#F0F4F0', opacity: 0.85 }}>
                   {activeSeg.text}
                 </span>
               ) : null}
@@ -661,7 +752,6 @@ export default function EditorPage() {
             </div>
           );
         })()}
-
         <div className="px-4 pb-4 flex items-center gap-4 flex-wrap">
           <button
             type="button"
@@ -871,6 +961,7 @@ export default function EditorPage() {
                       next[key] = { type: 'fade', duration: globalFadeDuration };
                     }
                   });
+                  saveToHistory();
                   setTransitions(next);
                   autoSave();
                 }}
@@ -888,6 +979,7 @@ export default function EditorPage() {
                       next[key] = { type: 'none', duration: 0.5 };
                     }
                   });
+                  saveToHistory();
                   setTransitions(next);
                   autoSave();
                 }}
@@ -910,6 +1002,7 @@ export default function EditorPage() {
                         value={t.type}
                         onChange={(e) => {
                           const type = e.target.value as 'none' | 'fade';
+                          saveToHistory();
                           setTransitions((prev) => ({
                             ...prev,
                             [key]: { type, duration: type === 'fade' ? (t.duration ?? 0.5) : 0.5 },
@@ -929,6 +1022,7 @@ export default function EditorPage() {
                           step={0.1}
                           value={t.duration ?? 0.5}
                           onChange={(e) => {
+                            saveToHistory();
                             setTransitions((prev) => ({
                               ...prev,
                               [key]: { type: 'fade', duration: Number(e.target.value) },
@@ -994,7 +1088,9 @@ export default function EditorPage() {
               >⟳ Replace Image</button>
               <button
                 onClick={() => {
+                  saveToHistory();
                   setSegments(prev => prev.filter(s => s.segment_id !== selectedSegmentId));
+                  updateTotalDuration();
                   setSelectedSegmentId(null);
                   autoSave();
                 }}
@@ -1058,9 +1154,11 @@ export default function EditorPage() {
                     if (Math.abs(newStart - currentTime) < snapThresholdL) {
                       newStart = currentTime;
                     }
+                    saveToHistory();
                     setSegments((prev) =>
                       prev.map((s) => (s.segment_id === dragRef.current!.segmentId ? { ...s, start: newStart } : s))
                     );
+                    updateTotalDuration();
                   };
                   const onUp = () => {
                     window.removeEventListener('mousemove', onMove);
@@ -1084,9 +1182,11 @@ export default function EditorPage() {
                     if (Math.abs(newEnd - currentTime) < snapThresholdR) {
                       newEnd = currentTime;
                     }
+                    saveToHistory();
                     setSegments((prev) =>
                       prev.map((s) => (s.segment_id === dragRef.current!.segmentId ? { ...s, end: newEnd } : s))
                     );
+                    updateTotalDuration();
                   };
                   const onUp = () => {
                     window.removeEventListener('mousemove', onMove);
@@ -1165,8 +1265,10 @@ export default function EditorPage() {
                           if (!currentSeg) return;
                           const segToPark = currentSeg;
                           didPark = true;
+                          saveToHistory();
                           setSegments(prev => prev.filter(s => s.segment_id !== segmentId));
                           setParkedSegments(prev => [...prev, segToPark]); // preserve original start/end times
+                          updateTotalDuration();
                           setMovingSegmentId(null);
                           setIsSnapping(false);
                           autoSave();
@@ -1256,6 +1358,8 @@ export default function EditorPage() {
                             }
                           }
                         } else {
+                          saveToHistory();
+                          updateTotalDuration();
                           autoSave();
                         }
 
@@ -1366,6 +1470,7 @@ export default function EditorPage() {
 
                           if (!didRestore && deltaY < -50) {
                             didRestore = true;
+                            saveToHistory();
                             setParkedSegments(prev => prev.filter(p => p.segment_id !== segmentId));
                             setSegments((prev) => {
                               const mainSegs = [...prev].sort((a, b) => a.start - b.start);
@@ -1407,6 +1512,7 @@ export default function EditorPage() {
                               const restoredSeg: Segment = { ...currentSeg, start: newStart, end: newEnd };
                               return [...prev, restoredSeg].sort((a, b) => a.start - b.start);
                             });
+                            updateTotalDuration();
                             setMovingSegmentId(null);
                             setIsSnapping(false);
                             autoSave();
