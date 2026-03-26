@@ -257,7 +257,7 @@ export default function ProjectPage() {
   }
 
   function handleConfirmReset() {
-    if (!resetModal.open || resetModal.open === false || !id) return;
+    if (!resetModal.open || !id) return;
     const step = 'step' in resetModal ? resetModal.step : 0;
     resetStep(id, step)
       .then(() => {

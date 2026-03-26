@@ -711,7 +711,7 @@ export default function EditorPage() {
           <canvas
             ref={canvasRef}
             onClick={() => setIsPlaying(prev => !prev)}
-            style={{ width: '100%', maxWidth: '860px', aspectRatio: '16/9', imageRendering: 'high-quality', display: 'block', margin: '0 auto', cursor: 'pointer' }}
+            style={{ width: '100%', maxWidth: '860px', aspectRatio: '16/9', imageRendering: 'auto', display: 'block', margin: '0 auto', cursor: 'pointer' }}
             className="block bg-black"
           />
         </div>
