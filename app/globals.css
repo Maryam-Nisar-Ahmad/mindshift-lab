@@ -1,19 +1,211 @@
 @import "tailwindcss";
 
+/* Garden / baby pastel theme — use these vars everywhere for consistent UI */
 :root {
-  --bg-main: #0D1A12;
-  --bg-card: #132419;
-  --accent-green: #3DBA6F;
-  --accent-muted: #6BAF85;
-  --text-primary: #F0F4F0;
-  --text-secondary: #8FAF96;
-  --purple: #8B5CF6;
-  --red-danger: #EF4444;
-  --amber: #F59E0B;
+  --garden-sky: #d8f0fc;
+  --garden-mint-deep: #c5ecd4;
+  --garden-mint: #e6f7ec;
+  --garden-grass: #e3f5e8;
+  --garden-cream: #fffdf9;
+  --garden-surface: #eef8f1;
+  --garden-card: #f7fcf9;
+  --garden-well: #dcefe3;
+  --garden-timeline: #d4ede0;
+  --garden-input: #ffffff;
+  --garden-header: #dff3e5;
+  --garden-banner: #e8f5e9;
+  --garden-accent: #52b788;
+  --garden-accent-hover: #40916c;
+  --garden-leaf: #8fd99a;
+  --garden-leaf-soft: #b8e6bf;
+  --garden-leaf-stem: #74c69d;
+  --garden-petal: #ffc4dd;
+  --garden-petal-deep: #f4a5c7;
+  --garden-petal-soft: #ffe0ef;
+  --garden-lilac: #e4d4f4;
+  --garden-text: #1b4332;
+  --garden-text-soft: #52796f;
+  --garden-border: #b7e4c7;
+  --garden-border-strong: #95d5b2;
+  --garden-step-muted: #a8c5b5;
+  --garden-danger: #e07a5f;
+  --garden-danger-soft: #fde8e4;
+  --garden-warning: #f4d35e;
+  --garden-amber: #e9c46a;
+  --garden-gold: #e6c229;
+  --garden-blue: #64b5f6;
+  --garden-snap: #40916c;
+  --garden-unmatched-bg: #fff8e7;
+  --garden-unmatched-border: #e9c46a;
+  --garden-seg-bg: #edf8f1;
+  --garden-seg-border: #95d5b2;
+  --garden-handle: #52b788;
+  --garden-playhead: #e07a5f;
+  --garden-overlay: rgba(27, 67, 50, 0.4);
+  --garden-modal-bg: #f7fcf9;
+  --garden-missing: #f4a261;
+  --fun-coral: #ff8a80;
+  --fun-sunny: #ffe066;
+  --fun-bubble: #b388ff;
+
+  /* Legacy aliases (older names) */
+  --bg-main: var(--garden-surface);
+  --bg-card: var(--garden-card);
+  --accent-green: var(--garden-accent);
+  --accent-muted: var(--garden-leaf);
+  --text-primary: var(--garden-text);
+  --text-secondary: var(--garden-text-soft);
+  --purple: var(--garden-lilac);
+  --red-danger: var(--garden-danger);
+  --amber: var(--garden-amber);
+}
+
+@keyframes garden-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-10px) rotate(1.5deg);
+  }
+}
+
+@keyframes garden-float-slow {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes garden-wiggle {
+  0%,
+  100% {
+    transform: rotate(-2deg);
+  }
+  50% {
+    transform: rotate(2deg);
+  }
 }
 
 body {
-  background-color: var(--bg-main);
-  color: var(--text-primary);
+  background-color: var(--garden-surface);
+  color: var(--garden-text);
   min-height: 100vh;
+  background-image:
+    radial-gradient(ellipse 90% 55% at 15% 5%, rgba(255, 138, 128, 0.18), transparent),
+    radial-gradient(ellipse 100% 60% at 50% -10%, rgba(255, 212, 231, 0.4), transparent),
+    radial-gradient(ellipse 80% 50% at 100% 0%, rgba(216, 240, 252, 0.55), transparent),
+    radial-gradient(ellipse 70% 40% at 80% 100%, rgba(179, 136, 255, 0.12), transparent),
+    linear-gradient(180deg, var(--garden-cream) 0%, var(--garden-surface) 42%, var(--garden-mint) 100%);
+}
+
+/* Subtle leaf dots pattern */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.16;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Cpath d='M40 8c4 12 8 20 0 28-8-8-4-16 0-28z' fill='%2374c69d'/%3E%3Cpath d='M8 50c10 2 18 6 14 18-12-4-14-12-14-18z' fill='%2395d5b2'/%3E%3C/svg%3E");
+  background-size: 100px 100px;
+}
+
+.garden-app-root {
+  position: relative;
+  min-height: 100vh;
+}
+
+.garden-app-root > .garden-content {
+  position: relative;
+  z-index: 1;
+}
+
+.garden-label-soft {
+  color: var(--garden-text-soft);
+}
+
+.garden-input-field {
+  background-color: var(--garden-input);
+  border: 1px solid var(--garden-border);
+  color: var(--garden-text);
+}
+
+.garden-pre {
+  background-color: var(--garden-well);
+  color: var(--garden-text);
+  border: 1px solid var(--garden-border);
+}
+
+/* Playful display headings (Fredoka) */
+.fun-display {
+  font-family: var(--font-display), var(--font-garden), system-ui, sans-serif;
+}
+
+.fun-decor-drift {
+  animation: garden-float 7s ease-in-out infinite;
+}
+
+.fun-decor-drift-slow {
+  animation: garden-float-slow 9s ease-in-out infinite;
+  animation-delay: -2s;
+}
+
+.fun-decor-drift-delayed {
+  animation: garden-float 8s ease-in-out infinite;
+  animation-delay: -3.5s;
+}
+
+.fun-cta-pop {
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.25s ease;
+}
+
+.fun-cta-pop:hover {
+  transform: translateY(-3px) scale(1.02);
+  box-shadow: 0 14px 32px color-mix(in srgb, var(--garden-accent) 35%, transparent);
+}
+
+.fun-cta-pop:active {
+  transform: translateY(0) scale(0.99);
+}
+
+.fun-step-card {
+  transition:
+    transform 0.22s ease,
+    box-shadow 0.22s ease,
+    border-color 0.2s ease;
+  border-radius: 1.25rem;
+}
+
+.fun-step-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 36px rgba(27, 67, 50, 0.09);
+}
+
+.fun-step-card-active {
+  box-shadow:
+    0 12px 32px color-mix(in srgb, var(--garden-accent) 22%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--garden-accent) 25%, transparent);
+}
+
+.fun-app-header {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid color-mix(in srgb, var(--garden-border) 65%, transparent);
+  box-shadow: 0 4px 20px rgba(27, 67, 50, 0.04);
+}
+
+.fun-brand-leaf {
+  display: inline-block;
+  animation: garden-wiggle 3.2s ease-in-out infinite;
+}
+
+.fun-step-badge-pulse {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--garden-accent) 30%, transparent);
+  transform: scale(1.06);
 }

@@ -146,8 +146,12 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate }: Sce
   return (
     <div className="space-y-4">
       <div
-        className="rounded-lg border border-[#F59E0B] bg-amber-500/10 p-3 mb-4 text-sm"
-        style={{ color: '#F59E0B' }}
+        className="rounded-lg border p-3 mb-4 text-sm"
+        style={{
+          borderColor: 'var(--garden-warning)',
+          backgroundColor: 'color-mix(in srgb, var(--garden-warning) 14%, var(--garden-card))',
+          color: 'var(--garden-text)',
+        }}
       >
         Save images as 1.png, 2.png... into:
         <br />
@@ -158,8 +162,8 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate }: Sce
         type="button"
         className="w-full rounded-lg py-2.5 text-sm font-medium"
         style={{
-          backgroundColor: seqMid ? '#EF4444' : '#3DBA6F',
-          color: '#fff',
+          backgroundColor: seqMid ? 'var(--garden-danger)' : 'var(--garden-accent)',
+          color: 'var(--garden-cream)',
         }}
         onClick={handleCopySequence}
         disabled={total === 0 || seqDone}
@@ -175,39 +179,55 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate }: Sce
           return (
             <div
               key={seg.segment_id}
-              className={`rounded-xl p-4 cursor-pointer border ${copied ? 'border-[#8B5CF6] bg-[#2D1B69]' : 'border-[#2A4A35] bg-[#132419]'}`}
+              className="rounded-xl p-4 cursor-pointer border"
+              style={
+                copied
+                  ? {
+                      borderColor: 'var(--garden-lilac)',
+                      backgroundColor: 'color-mix(in srgb, var(--garden-lilac) 22%, var(--garden-card))',
+                    }
+                  : {
+                      borderColor: 'var(--garden-border)',
+                      backgroundColor: 'var(--garden-card)',
+                    }
+              }
               onClick={() => handleToggleExpand(seg.segment_id)}
             >
               <div className="flex items-center justify-between gap-2 mb-2">
                 <span
                   className="rounded text-xs font-medium px-2 py-0.5 shrink-0"
-                  style={{ backgroundColor: '#3DBA6F', color: '#0D1A12' }}
+                  style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                 >
                   Scene {seg.segment_id}
                 </span>
               </div>
               <p
                 className={`font-mono text-xs mb-3 ${expanded ? '' : 'line-clamp-2'}`}
-                style={{ color: '#8FAF96' }}
+                style={{ color: 'var(--garden-text-soft)' }}
               >
                 {seg.mj_line}
               </p>
               <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                 <button
                   type="button"
-                  className="rounded border px-2 py-1 text-xs font-medium border-[#3DBA6F] text-[#3DBA6F] hover:bg-[#3DBA6F]/10"
+                  className="rounded border px-2 py-1 text-xs font-medium hover:bg-[color-mix(in_srgb,var(--garden-accent)_12%,transparent)]"
+                  style={{ borderColor: 'var(--garden-accent)', color: 'var(--garden-accent)' }}
                   onClick={() => handleCopyCard(seg.segment_id, seg.mj_line)}
                 >
                   Copy
                 </button>
                 <button
                   type="button"
-                  className="rounded border px-2 py-1 text-xs font-medium border-[#F59E0B] text-[#F59E0B] hover:bg-amber-500/10 disabled:opacity-50"
+                  className="rounded border px-2 py-1 text-xs font-medium hover:bg-[color-mix(in_srgb,var(--garden-warning)_14%,transparent)] disabled:opacity-50"
+                  style={{ borderColor: 'var(--garden-warning)', color: 'var(--garden-warning)' }}
                   onClick={() => handleRegen(seg)}
                   disabled={loading}
                 >
                   {loading ? (
-                    <span className="inline-block h-3 w-3 border-2 border-[#F59E0B] border-t-transparent rounded-full animate-spin" />
+                    <span
+                      className="inline-block h-3 w-3 border-2 rounded-full animate-spin border-t-transparent"
+                      style={{ borderColor: 'var(--garden-warning)' }}
+                    />
                   ) : (
                     'Regen'
                   )}
@@ -221,20 +241,20 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate }: Sce
       <div className="flex items-center justify-center gap-4 pt-4">
         <button
           type="button"
-          className="rounded px-3 py-1.5 text-sm text-white/80 hover:text-white disabled:opacity-50"
-          style={{ backgroundColor: '#132419' }}
+          className="rounded px-3 py-1.5 text-sm disabled:opacity-50 border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)]"
+          style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text-soft)' }}
           onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
           disabled={currentPage <= 1}
         >
           Prev
         </button>
-        <span className="text-sm text-white/80">
+        <span className="text-sm" style={{ color: 'var(--garden-text-soft)' }}>
           Page {currentPage} of {totalPages}
         </span>
         <button
           type="button"
-          className="rounded px-3 py-1.5 text-sm text-white/80 hover:text-white disabled:opacity-50"
-          style={{ backgroundColor: '#132419' }}
+          className="rounded px-3 py-1.5 text-sm disabled:opacity-50 border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)]"
+          style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text-soft)' }}
           onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
           disabled={currentPage >= totalPages}
         >

@@ -43,19 +43,25 @@ export default function Page() {
   }
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-[#0a1210] overflow-y-auto">
-      <div className="flex flex-col items-center text-center">
-        <h1 className="text-5xl font-bold" style={{ color: '#3DBA6F' }}>
+    <div
+      className="fixed inset-0 flex items-center justify-center overflow-y-auto"
+      style={{ backgroundColor: 'var(--garden-surface)' }}
+    >
+      <div className="relative z-[1] flex flex-col items-center text-center px-4">
+        <p className="mb-1 text-2xl opacity-60" aria-hidden>
+          🌸 🌿
+        </p>
+        <h1 className="fun-display text-5xl font-bold tracking-tight" style={{ color: 'var(--garden-accent)' }}>
           MindShift Lab
         </h1>
-        <p className="mt-2" style={{ color: '#8FAF96' }}>
-          Your automated video production system
+        <p className="fun-display mt-2 max-w-md font-medium" style={{ color: 'var(--garden-text-soft)' }}>
+          Grow videos like a garden — playful steps, serious output
         </p>
         <button
           type="button"
           onClick={() => setModalOpen(true)}
-          className="mt-8 rounded-lg px-6 py-3 text-lg font-medium text-white transition-opacity hover:opacity-90"
-          style={{ backgroundColor: '#3DBA6F' }}
+          className="fun-cta-pop fun-display mt-8 rounded-2xl px-8 py-3 text-lg font-bold shadow-md"
+          style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
         >
           Start New Video
         </button>
@@ -64,45 +70,66 @@ export default function Page() {
       <button
         type="button"
         onClick={() => setDrawerOpen(true)}
-        className="fixed right-4 top-4 rounded border px-3 py-1.5 text-sm font-medium transition-opacity hover:opacity-90"
-        style={{ borderColor: '#3DBA6F', color: '#3DBA6F' }}
+        className="fixed right-4 top-4 z-[2] rounded-2xl border-2 bg-[var(--garden-card)] px-4 py-2 text-sm font-semibold shadow-sm transition-all hover:shadow-md"
+        style={{ borderColor: 'var(--garden-accent)', color: 'var(--garden-accent)' }}
       >
         Previous Videos
       </button>
 
       {modalOpen && (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/60"
+          className="fixed inset-0 z-40 flex items-center justify-center"
+          style={{ backgroundColor: 'var(--garden-overlay)' }}
           onClick={() => setModalOpen(false)}
         >
           <div
-            className="z-50 w-full max-w-md rounded-xl bg-[#132419] p-6 shadow-xl"
+            className="z-50 w-full max-w-md rounded-2xl border-2 p-6 shadow-xl"
+            style={{
+              backgroundColor: 'var(--garden-modal-bg)',
+              borderColor: 'var(--garden-border-strong)',
+            }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="mb-4 text-lg font-semibold text-white">New Video</h2>
+            <h2 className="mb-1 text-lg font-semibold" style={{ color: 'var(--garden-text)' }}>
+              New Video
+            </h2>
+            <p className="mb-4 text-sm" style={{ color: 'var(--garden-text-soft)' }}>
+              Give your project a sunny name
+            </p>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Title"
-              className="mb-4 w-full rounded border bg-[#0D1A12] px-3 py-2 text-white placeholder-[#8FAF96] outline-none"
-              style={{ borderColor: '#3DBA6F' }}
+              className="mb-4 w-full rounded-xl border-2 px-3 py-2 outline-none focus:ring-2 focus:ring-[var(--garden-accent)]"
+              style={{
+                borderColor: 'var(--garden-border-strong)',
+                backgroundColor: 'var(--garden-input)',
+                color: 'var(--garden-text)',
+              }}
             />
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={handleCreate}
                 disabled={!title.trim()}
-                className="rounded-lg px-4 py-2 font-medium text-white disabled:opacity-50"
-                style={{ backgroundColor: '#3DBA6F' }}
+                className="rounded-xl px-4 py-2 font-semibold disabled:opacity-50"
+                style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
               >
                 Create
               </button>
               <button
                 type="button"
-                onClick={() => { setModalOpen(false); setTitle(''); }}
-                className="rounded-lg border px-4 py-2 font-medium text-[#8FAF96]"
-                style={{ borderColor: '#8FAF96' }}
+                onClick={() => {
+                  setModalOpen(false);
+                  setTitle('');
+                }}
+                className="rounded-xl border-2 px-4 py-2 font-medium"
+                style={{
+                  borderColor: 'var(--garden-border)',
+                  color: 'var(--garden-text-soft)',
+                  backgroundColor: 'var(--garden-surface)',
+                }}
               >
                 Cancel
               </button>
@@ -112,15 +139,25 @@ export default function Page() {
       )}
 
       <div
-        className="fixed right-0 top-0 z-30 h-full w-80 bg-[#132419] shadow-xl transition-transform duration-300 ease-out"
-        style={{ transform: drawerOpen ? 'translateX(0)' : 'translateX(100%)' }}
+        className="fixed right-0 top-0 z-30 h-full w-80 border-l-2 shadow-xl transition-transform duration-300 ease-out"
+        style={{
+          transform: drawerOpen ? 'translateX(0)' : 'translateX(100%)',
+          backgroundColor: 'var(--garden-card)',
+          borderColor: 'var(--garden-border-strong)',
+        }}
       >
-        <div className="flex items-center justify-between border-b border-[#0D1A12] p-4">
-          <span className="font-semibold text-white">Previous Videos</span>
+        <div
+          className="flex items-center justify-between border-b-2 p-4"
+          style={{ borderColor: 'var(--garden-border)' }}
+        >
+          <span className="font-semibold" style={{ color: 'var(--garden-text)' }}>
+            Previous Videos
+          </span>
           <button
             type="button"
             onClick={() => setDrawerOpen(false)}
-            className="text-[#8FAF96] hover:text-white"
+            className="rounded-lg px-2 py-1 font-medium transition-colors hover:opacity-80"
+            style={{ color: 'var(--garden-text-soft)' }}
             aria-label="Close"
           >
             X
@@ -128,7 +165,7 @@ export default function Page() {
         </div>
         <div className="overflow-y-auto p-4">
           {projects.length === 0 ? (
-            <p className="text-[#8FAF96]">No videos yet</p>
+            <p style={{ color: 'var(--garden-text-soft)' }}>No videos yet — plant your first one above</p>
           ) : (
             projects.map((project) => (
               <div
@@ -146,15 +183,20 @@ export default function Page() {
                     router.push('/project/' + encodeProjectIdForRoute(project.id));
                   }
                 }}
-                className="mb-2 cursor-pointer rounded p-4 transition-opacity hover:opacity-90"
-                style={{ backgroundColor: '#0D1A12' }}
+                className="mb-2 cursor-pointer rounded-xl border-2 p-4 transition-all hover:shadow-md"
+                style={{
+                  backgroundColor: 'var(--garden-surface)',
+                  borderColor: 'var(--garden-border)',
+                }}
               >
-                <div className="font-bold text-white">{project.title}</div>
-                <span className="text-sm" style={{ color: '#3DBA6F' }}>
+                <div className="font-bold" style={{ color: 'var(--garden-text)' }}>
+                  {project.title}
+                </div>
+                <span className="text-sm font-medium" style={{ color: 'var(--garden-accent)' }}>
                   Step {((project.current_step ?? 0) + 1)}/7
                 </span>
                 {project.mtime != null && (
-                  <div className="mt-1 text-sm" style={{ color: '#8FAF96' }}>
+                  <div className="mt-1 text-sm" style={{ color: 'var(--garden-text-soft)' }}>
                     {new Date(project.mtime * 1000).toLocaleDateString()}
                   </div>
                 )}

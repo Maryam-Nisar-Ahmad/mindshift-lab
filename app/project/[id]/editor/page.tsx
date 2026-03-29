@@ -612,21 +612,21 @@ export default function EditorPage() {
 
   if (!project) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#0D1A12' }}>
-        <p className="text-white/70">Loading…</p>
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--garden-surface)' }}>
+        <p className="text-[color:var(--garden-text-soft)]">Loading…</p>
       </div>
     );
   }
 
   if (dataLoaded && segments.length === 0) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4" style={{ backgroundColor: '#0D1A12' }}>
-        <p className="text-white/70">No segments — go back and run Assemble</p>
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4" style={{ backgroundColor: 'var(--garden-surface)' }}>
+        <p className="text-[color:var(--garden-text-soft)]">No segments — go back and run Assemble</p>
         <button
           type="button"
           onClick={handleBack}
-          className="rounded px-4 py-2 text-sm font-medium text-white"
-          style={{ backgroundColor: '#3DBA6F' }}
+          className="rounded px-4 py-2 text-sm font-medium text-[color:var(--garden-cream)]"
+          style={{ backgroundColor: 'var(--garden-accent)' }}
         >
           Back
         </button>
@@ -636,13 +636,13 @@ export default function EditorPage() {
 
   if (dataLoaded && totalDuration === 0 && segments.length > 0) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4" style={{ backgroundColor: '#0D1A12' }}>
-        <p className="text-white/70">No audio — go back and process audio</p>
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4" style={{ backgroundColor: 'var(--garden-surface)' }}>
+        <p className="text-[color:var(--garden-text-soft)]">No audio — go back and process audio</p>
         <button
           type="button"
           onClick={handleBack}
-          className="rounded px-4 py-2 text-sm font-medium text-white"
-          style={{ backgroundColor: '#3DBA6F' }}
+          className="rounded px-4 py-2 text-sm font-medium text-[color:var(--garden-cream)]"
+          style={{ backgroundColor: 'var(--garden-accent)' }}
         >
           Back
         </button>
@@ -655,27 +655,27 @@ export default function EditorPage() {
       <audio ref={audioRef} src={fileUrl(id, 'audio.mp3')} preload="auto" className="hidden" />
       <header
         className="fixed top-0 left-0 right-0 z-10 flex h-14 items-center px-6"
-        style={{ backgroundColor: '#132419' }}
+        style={{ backgroundColor: 'var(--garden-card)' }}
       >
         <button
           type="button"
           onClick={handleBack}
-          className="mr-3 text-white/80 hover:text-white"
+          className="mr-3 text-[color:var(--garden-text-soft)] hover:opacity-90"
           aria-label="Back"
         >
           ←
         </button>
-        <span className="text-white flex-1">Editor — {project.title}</span>
+        <span className="text-[color:var(--garden-text)] flex-1">Editor — {project.title}</span>
         <button
           type="button"
           onClick={handleExportClick}
-          className="text-white/80 hover:text-white text-sm"
+          className="text-[color:var(--garden-text-soft)] hover:opacity-90 text-sm"
         >
           Export
         </button>
       </header>
 
-      <main className="pt-14" style={{ backgroundColor: '#0D1A12' }}>
+      <main className="pt-14" style={{ backgroundColor: 'var(--garden-surface)' }}>
         <div className="flex justify-center p-4">
           <input
             ref={replaceInputRef}
@@ -783,24 +783,24 @@ export default function EditorPage() {
           );
           return (
             <div
-              className="px-4 pb-1 py-2 flex items-center gap-2 flex-wrap bg-black/40 rounded-md"
-              style={{ minHeight: '24px' }}
+              className="px-4 pb-1 py-2 flex items-center gap-2 flex-wrap rounded-md border border-[color:var(--garden-border)]"
+              style={{ minHeight: '24px', backgroundColor: 'var(--garden-well)' }}
             >
               <span
                 className="text-lg font-medium px-3 py-1 rounded-md"
-                style={{ backgroundColor: '#132419', color: '#3DBA6F' }}
+                style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-accent)' }}
               >
                 Scene {sceneIdx + 1}
               </span>
               {activeSeg.text ? (
-                <span className="text-base" style={{ color: '#F0F4F0', opacity: 0.85 }}>
+                <span className="text-base" style={{ color: 'var(--garden-text)', opacity: 0.85 }}>
                   {activeSeg.text}
                 </span>
               ) : null}
               {activeSeg.matched === false && (
                 <span
                   className="text-xs px-1.5 py-0.5 rounded"
-                  style={{ backgroundColor: '#6B5A1A', color: '#F0C040' }}
+                  style={{ backgroundColor: 'var(--garden-unmatched-border)', color: 'var(--garden-cream)' }}
                 >
                   ⚠ Unmatched — adjust position manually
                 </span>
@@ -812,18 +812,18 @@ export default function EditorPage() {
           <button
             type="button"
             onClick={() => setIsPlaying((p) => !p)}
-            className="rounded px-4 py-2 text-sm font-medium text-white"
-            style={{ backgroundColor: '#3DBA6F' }}
+            className="rounded px-4 py-2 text-sm font-medium text-[color:var(--garden-cream)]"
+            style={{ backgroundColor: 'var(--garden-accent)' }}
           >
             {isPlaying ? 'Pause' : 'Play'}
           </button>
-          <span className="text-white font-mono text-sm">
+          <span className="text-[color:var(--garden-text)] font-mono text-sm">
             {formatTime(currentTime)}
           </span>
           <select
             value={playbackSpeed}
             onChange={e => setPlaybackSpeed(Number(e.target.value))}
-            className="rounded bg-[#0D1A12] border border-[#2A4A35] text-[#F0F4F0] text-xs px-2 py-1 ml-2"
+            className="rounded bg-[var(--garden-surface)] border border-[color:var(--garden-border)] text-[color:var(--garden-text)] text-xs px-2 py-1 ml-2"
           >
             <option value={0.25}>0.25x</option>
             <option value={0.5}>0.5x</option>
@@ -846,17 +846,17 @@ export default function EditorPage() {
                 audioRef.current.currentTime = newTime;
               }
             }}
-            className="flex-1 min-w-[120px] accent-[#3DBA6F]"
+            className="flex-1 min-w-[120px] accent-[color:var(--garden-accent)]"
           />
         </div>
 
         <div className="mx-4 mt-4 flex gap-4">
           <div className="flex-[0.6] flex flex-col">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-[#F0F4F0] font-semibold">Subtitles</span>
+              <span className="text-[color:var(--garden-text)] font-semibold">Subtitles</span>
               <button
                 onClick={() => setSubtitlesPanelOpen(o => !o)}
-                className="text-[#8FAF96] hover:text-[#F0F4F0] text-xs px-2 py-1 rounded border border-[#2A4A35] hover:border-[#3DBA6F] transition-colors"
+                className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] transition-colors"
               >
                 {subtitlesPanelOpen ? '▲ Hide' : '▼ Show'}
               </button>
@@ -878,8 +878,8 @@ export default function EditorPage() {
                     showToast(err instanceof Error ? err.message : 'Request failed', 'error');
                   }
                 }}
-                className="rounded px-4 py-2 text-sm font-medium text-white w-fit"
-                style={{ backgroundColor: '#3DBA6F' }}
+                className="rounded px-4 py-2 text-sm font-medium text-[color:var(--garden-cream)] w-fit"
+                style={{ backgroundColor: 'var(--garden-accent)' }}
               >
                 Generate Subtitles
               </button>
@@ -887,7 +887,7 @@ export default function EditorPage() {
               <>
                 <div className="flex flex-wrap items-center gap-3 mb-2">
                   <label className="flex items-center gap-2">
-                    <span className="text-white/80 text-sm">Font Size</span>
+                    <span className="text-[color:var(--garden-text-soft)] text-sm">Font Size</span>
                     <input
                       type="range"
                       min={24}
@@ -897,12 +897,12 @@ export default function EditorPage() {
                         setSubtitleSettings((s) => ({ ...s, font_size: Number(e.target.value) }));
                         autoSave();
                       }}
-                      className="accent-[#3DBA6F]"
+                      className="accent-[color:var(--garden-accent)]"
                     />
-                    <span className="text-[#8FAF96] text-xs font-mono w-6">{subtitleSettings.font_size}</span>
+                    <span className="text-[color:var(--garden-text-soft)] text-xs font-mono w-6">{subtitleSettings.font_size}</span>
                   </label>
                   <label className="flex items-center gap-2">
-                    <span className="text-[#8FAF96] text-xs">Y Position %</span>
+                    <span className="text-[color:var(--garden-text-soft)] text-xs">Y Position %</span>
                     <input
                       type="number"
                       min={0}
@@ -912,11 +912,11 @@ export default function EditorPage() {
                         setSubtitleSettings((prev) => ({ ...prev, positionY: Number(e.target.value) }));
                         autoSave();
                       }}
-                      className="w-16 bg-[#0D1A12] border border-[#2A4A35] rounded text-[#F0F4F0] text-xs px-2 py-1"
+                      className="w-16 bg-[var(--garden-surface)] border border-[color:var(--garden-border)] rounded text-[color:var(--garden-text)] text-xs px-2 py-1"
                     />
                   </label>
                   <label className="flex items-center gap-2">
-                    <span className="text-white/80 text-sm">Color</span>
+                    <span className="text-[color:var(--garden-text-soft)] text-sm">Color</span>
                     <input
                       type="color"
                       value={subtitleSettings.color}
@@ -924,11 +924,11 @@ export default function EditorPage() {
                         setSubtitleSettings((s) => ({ ...s, color: e.target.value }));
                         autoSave();
                       }}
-                      className="w-8 h-8 rounded border border-[#2A4A35] cursor-pointer"
+                      className="w-8 h-8 rounded border border-[color:var(--garden-border)] cursor-pointer"
                     />
                   </label>
                   <label className="flex items-center gap-2">
-                    <span className="text-white/80 text-sm">Highlight</span>
+                    <span className="text-[color:var(--garden-text-soft)] text-sm">Highlight</span>
                     <input
                       type="checkbox"
                       checked={subtitleSettings.highlight_enabled}
@@ -942,7 +942,7 @@ export default function EditorPage() {
                     />
                   </label>
                   <label className="flex items-center gap-2">
-                    <span className="text-white/80 text-sm">Outline</span>
+                    <span className="text-[color:var(--garden-text-soft)] text-sm">Outline</span>
                     <input
                       type="range"
                       min={0}
@@ -950,25 +950,25 @@ export default function EditorPage() {
                       step={1}
                       value={subtitleSettings.outline_width ?? 4}
                       onChange={e => setSubtitleSettings(s => ({...s, outline_width: Number(e.target.value)}))}
-                      className="w-24 accent-[#3DBA6F]"
+                      className="w-24 accent-[color:var(--garden-accent)]"
                     />
-                    <span className="text-white/60 text-xs">{subtitleSettings.outline_width ?? 4}px</span>
+                    <span className="text-[color:var(--garden-step-muted)] text-xs">{subtitleSettings.outline_width ?? 4}px</span>
                   </label>
                 </div>
                 <div className="max-h-64 overflow-y-auto space-y-1">
                   {subtitles.map((line, idx) => (
                     <div
                       key={idx}
-                      className="rounded p-2 flex gap-3 cursor-pointer hover:bg-[#0D1A12]"
+                      className="rounded p-2 flex gap-3 cursor-pointer hover:bg-[var(--garden-surface)]"
                       onClick={() => setCurrentTime(line.start)}
                     >
-                      <span className="text-[#8FAF96] text-xs font-mono flex-shrink-0">
+                      <span className="text-[color:var(--garden-text-soft)] text-xs font-mono flex-shrink-0">
                         {formatTime(line.start)}
                       </span>
                       <span
                         contentEditable
                         suppressContentEditableWarning
-                        className="text-[#F0F4F0] flex-1 outline-none"
+                        className="text-[color:var(--garden-text)] flex-1 outline-none"
                         onBlur={(e) => handleEdit(idx, e.currentTarget.textContent ?? '')}
                       >
                         {line.text}
@@ -983,10 +983,10 @@ export default function EditorPage() {
           </div>
           <div className="flex-[0.4] flex flex-col">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-[#F0F4F0] font-semibold">Transitions</span>
+              <span className="text-[color:var(--garden-text)] font-semibold">Transitions</span>
               <button
                 onClick={() => setTransitionsPanelOpen(o => !o)}
-                className="text-[#8FAF96] hover:text-[#F0F4F0] text-xs px-2 py-1 rounded border border-[#2A4A35] hover:border-[#3DBA6F] transition-colors"
+                className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] transition-colors"
               >
                 {transitionsPanelOpen ? '▲ Hide' : '▼ Show'}
               </button>
@@ -997,7 +997,7 @@ export default function EditorPage() {
               <select
                 value={globalFadeDuration}
                 onChange={e => setGlobalFadeDuration(Number(e.target.value))}
-                className="rounded bg-[#0D1A12] border border-[#2A4A35] text-[#F0F4F0] text-xs px-2 py-1"
+                className="rounded bg-[var(--garden-surface)] border border-[color:var(--garden-border)] text-[color:var(--garden-text)] text-xs px-2 py-1"
               >
                 <option value={0.1}>0.1s</option>
                 <option value={0.2}>0.2s</option>
@@ -1021,7 +1021,7 @@ export default function EditorPage() {
                   setTransitions(next);
                   autoSave();
                 }}
-                className="rounded border border-[#3DBA6F] text-[#3DBA6F] text-xs px-2 py-1 hover:bg-[#3DBA6F]/10"
+                className="rounded border border-[color:var(--garden-accent)] text-[color:var(--garden-accent)] text-xs px-2 py-1 hover:bg-[color-mix(in_srgb,var(--garden-accent)_12%,transparent)]"
               >
                 Apply Fade to All
               </button>
@@ -1039,7 +1039,7 @@ export default function EditorPage() {
                   setTransitions(next);
                   autoSave();
                 }}
-                className="rounded border border-[#EF4444] text-[#EF4444] text-xs px-2 py-1 hover:bg-[#EF4444]/10"
+                className="rounded border border-[color:var(--garden-danger)] text-[color:var(--garden-danger)] text-xs px-2 py-1 hover:bg-[color-mix(in_srgb,var(--garden-danger)_12%,transparent)]"
               >
                 Unapply Fade to All
               </button>
@@ -1051,7 +1051,7 @@ export default function EditorPage() {
                   const t = transitions[key] ?? { type: 'none' as const, duration: 0.5 };
                   return (
                     <div key={key} className="flex flex-col gap-1">
-                      <span className="text-[#8FAF96] text-xs">
+                      <span className="text-[color:var(--garden-text-soft)] text-xs">
                         Scene {i + 1} -&gt; Scene {i + 2}
                       </span>
                       <select
@@ -1065,7 +1065,7 @@ export default function EditorPage() {
                           }));
                           autoSave();
                         }}
-                        className="rounded bg-[#0D1A12] border border-[#2A4A35] text-[#F0F4F0] text-sm px-2 py-1"
+                        className="rounded bg-[var(--garden-surface)] border border-[color:var(--garden-border)] text-[color:var(--garden-text)] text-sm px-2 py-1"
                       >
                         <option value="none">None</option>
                         <option value="fade">Fade</option>
@@ -1085,7 +1085,7 @@ export default function EditorPage() {
                             }));
                             autoSave();
                           }}
-                          className="accent-[#3DBA6F]"
+                          className="accent-[color:var(--garden-accent)]"
                         />
                       )}
                     </div>
@@ -1096,21 +1096,21 @@ export default function EditorPage() {
             )}
           </div>
         </div>
-        <div className="mt-4 mx-4 rounded-xl" style={{ backgroundColor: '#0A1510' }}>
+        <div className="mt-4 mx-4 rounded-xl" style={{ backgroundColor: 'var(--garden-timeline)' }}>
           <div className="flex items-center gap-2 px-2 py-1">
-            <span className="text-[#8FAF96] text-xs">Zoom</span>
+            <span className="text-[color:var(--garden-text-soft)] text-xs">Zoom</span>
             <button
               onClick={() => setTimelineZoom(z => Math.max(1, parseFloat((z - zoomStep).toFixed(1))))}
-              className="text-[#8FAF96] hover:text-[#F0F4F0] text-xs px-2 py-0.5 rounded border border-[#2A4A35] hover:border-[#3DBA6F]"
+              className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-0.5 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)]"
             >−</button>
-            <span className="text-[#8FAF96] text-xs w-8 text-center">{timelineZoom}x</span>
+            <span className="text-[color:var(--garden-text-soft)] text-xs w-8 text-center">{timelineZoom}x</span>
             <button
               onClick={() => setTimelineZoom(z => Math.min(10, parseFloat((z + zoomStep).toFixed(1))))}
-              className="text-[#8FAF96] hover:text-[#F0F4F0] text-xs px-2 py-0.5 rounded border border-[#2A4A35] hover:border-[#3DBA6F]"
+              className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-0.5 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)]"
             >+</button>
             <button
               onClick={() => setTimelineZoom(1)}
-              className="text-[#8FAF96] hover:text-[#F0F4F0] text-xs px-2 py-0.5 rounded border border-[#2A4A35] hover:border-[#3DBA6F]"
+              className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-0.5 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)]"
             >Reset</button>
             <input
               type="range"
@@ -1119,12 +1119,12 @@ export default function EditorPage() {
               step={0.1}
               value={timelineZoom}
               onChange={e => setTimelineZoom(Number(e.target.value))}
-              className="w-32 accent-[#3DBA6F]"
+              className="w-32 accent-[color:var(--garden-accent)]"
             />
             <select
               value={zoomStep}
               onChange={e => setZoomStep(Number(e.target.value))}
-              className="rounded bg-[#0D1A12] border border-[#2A4A35] text-[#F0F4F0] text-xs px-1 py-0.5"
+              className="rounded bg-[var(--garden-surface)] border border-[color:var(--garden-border)] text-[color:var(--garden-text)] text-xs px-1 py-0.5"
             >
               <option value={0.5}>0.5x step</option>
               <option value={1}>1x step</option>
@@ -1133,14 +1133,14 @@ export default function EditorPage() {
             </select>
           </div>
           {selectedSegmentId !== null && (
-            <div className="flex items-center gap-2 px-2 py-1 bg-[#132419] border-b border-[#2A4A35]">
-              <span className="text-[#8FAF96] text-xs">Scene {(segments.findIndex(s => s.segment_id === selectedSegmentId) + 1)} selected</span>
+            <div className="flex items-center gap-2 px-2 py-1 border-b border-[color:var(--garden-border)]" style={{ backgroundColor: 'var(--garden-card)' }}>
+              <span className="text-[color:var(--garden-text-soft)] text-xs">Scene {(segments.findIndex(s => s.segment_id === selectedSegmentId) + 1)} selected</span>
               <button
                 onClick={() => {
                   setReplacingSegmentId(selectedSegmentId);
                   replaceInputRef.current?.click();
                 }}
-                className="text-xs px-2 py-0.5 rounded border border-[#3DBA6F] text-[#3DBA6F] hover:bg-[#3DBA6F]/10"
+                className="text-xs px-2 py-0.5 rounded border border-[color:var(--garden-accent)] text-[color:var(--garden-accent)] hover:bg-[color-mix(in_srgb,var(--garden-accent)_12%,transparent)]"
               >⟳ Replace Image</button>
               <button
                 onClick={() => {
@@ -1150,24 +1150,24 @@ export default function EditorPage() {
                   setSelectedSegmentId(null);
                   autoSave();
                 }}
-                className="text-xs px-2 py-0.5 rounded border border-[#EF4444] text-[#EF4444] hover:bg-[#EF4444]/10"
+                className="text-xs px-2 py-0.5 rounded border border-[color:var(--garden-danger)] text-[color:var(--garden-danger)] hover:bg-[color-mix(in_srgb,var(--garden-danger)_12%,transparent)]"
               >✕ Delete Scene</button>
               <button
                 onClick={() => {
                   addInputRef.current?.click();
                 }}
-                className="text-xs px-2 py-0.5 rounded border border-[#F59E0B] text-[#F59E0B] hover:bg-[#F59E0B]/10"
+                className="text-xs px-2 py-0.5 rounded border border-[color:var(--garden-warning)] text-[color:var(--garden-warning)] hover:bg-[color-mix(in_srgb,var(--garden-warning)_12%,transparent)]"
               >+ Add Scene After</button>
               <button
                 onClick={() => setSelectedSegmentId(null)}
-                className="text-xs px-2 py-0.5 rounded border border-[#2A4A35] text-[#8FAF96] hover:border-[#3DBA6F]"
+                className="text-xs px-2 py-0.5 rounded border border-[color:var(--garden-border)] text-[color:var(--garden-text-soft)] hover:border-[color:var(--garden-accent)]"
               >Deselect</button>
             </div>
           )}
           <div
             ref={timelineOuterRef}
             className="overflow-x-auto rounded-xl relative"
-            style={{ height: '4.8rem', backgroundColor: '#0A1510', overflowY: 'visible' }}
+            style={{ height: '4.8rem', backgroundColor: 'var(--garden-timeline)', overflowY: 'visible' }}
             onClick={(e) => {
               if ((e.target as HTMLElement).closest('[data-timeline-segment]')) return;
               setMovingSegmentId(null);
@@ -1297,17 +1297,17 @@ export default function EditorPage() {
                   width,
                   height: '60%',
                   top: '20%',
-                  backgroundColor: isUnmatched ? '#1A1508' : '#132419',
+                  backgroundColor: isUnmatched ? 'var(--garden-unmatched-bg)' : 'var(--garden-seg-bg)',
                   borderColor:
                     (movingSegmentId === seg.segment_id && isSnapping)
-                      ? '#22C55E'
+                      ? 'var(--garden-snap)'
                       : isUnmatched
-                        ? (selectedSegmentId === seg.segment_id ? '#3DBA6F' : '#6B5A1A')
-                        : (selectedSegmentId === seg.segment_id ? '#3DBA6F' : '#2A4A35'),
+                        ? (selectedSegmentId === seg.segment_id ? 'var(--garden-accent)' : 'var(--garden-unmatched-border)')
+                        : (selectedSegmentId === seg.segment_id ? 'var(--garden-accent)' : 'var(--garden-seg-border)'),
                   borderStyle: isUnmatched ? 'dashed' : 'solid',
                   boxShadow: movingSegmentId === seg.segment_id
-                    ? (isSnapping ? '0 0 0 3px #F0C040' : '0 0 0 2px #F0C040')
-                    : selectedSegmentId === seg.segment_id ? '0 0 0 2px #3DBA6F' : 'none',
+                    ? (isSnapping ? '0 0 0 3px var(--garden-gold)' : '0 0 0 2px var(--garden-gold)')
+                    : selectedSegmentId === seg.segment_id ? '0 0 0 2px var(--garden-accent)' : 'none',
                   opacity: isUnmatched ? 0.75 : 1,
                   zIndex: (movingSegmentId === seg.segment_id ||
                            selectedSegmentId === seg.segment_id) ? 10 : 1,
@@ -1450,7 +1450,7 @@ export default function EditorPage() {
                     <div
                       className={`absolute left-0 top-0 h-full cursor-ew-resize hover:opacity-100 ${canTrimEdges ? 'w-3' : 'w-2'}`}
                       style={{
-                        backgroundColor: '#3DBA6F',
+                        backgroundColor: 'var(--garden-accent)',
                         opacity: canTrimEdges ? 0.5 : 0,
                         pointerEvents: canTrimEdges ? 'auto' : 'none',
                         zIndex: canTrimEdges ? 25 : 0,
@@ -1466,15 +1466,15 @@ export default function EditorPage() {
                         width={40}
                         height={25}
                       />
-                      <span className="text-xs text-white/80">Scene {idx + 1}</span>
-                      <span className="text-xs text-white/60">{formatTime(duration)}</span>
+                      <span className="text-xs text-[color:var(--garden-text)]">Scene {idx + 1}</span>
+                      <span className="text-xs text-[color:var(--garden-text-soft)]">{formatTime(duration)}</span>
                       {seg.matched === false && (
-                        <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/80 text-black">Unmatched</span>
+                        <span className="text-xs px-1.5 py-0.5 rounded text-[color:var(--garden-text)]" style={{ backgroundColor: 'var(--garden-warning)', opacity: 0.85 }}>Unmatched</span>
                       )}
                       {seg.matched === true && seg.match_ratio > 0 && seg.match_ratio < 75 && (
                         <span
                           className="text-xs px-1.5 py-0.5 rounded"
-                          style={{ backgroundColor: '#3D2A00', color: '#F0C040' }}
+                          style={{ backgroundColor: 'var(--garden-unmatched-border)', color: 'var(--garden-cream)' }}
                         >
                           ~{Math.round(seg.match_ratio)}%
                         </span>
@@ -1483,7 +1483,7 @@ export default function EditorPage() {
                     <div
                       className={`absolute right-0 top-0 h-full cursor-ew-resize hover:opacity-100 ${canTrimEdges ? 'w-3' : 'w-2'}`}
                       style={{
-                        backgroundColor: '#3DBA6F',
+                        backgroundColor: 'var(--garden-accent)',
                         opacity: canTrimEdges ? 0.5 : 0,
                         pointerEvents: canTrimEdges ? 'auto' : 'none',
                         zIndex: canTrimEdges ? 25 : 0,
@@ -1500,17 +1500,17 @@ export default function EditorPage() {
                   style={{
                     left: (currentTime / totalDuration) * timelineContainerWidth * timelineZoom,
                     width: 2,
-                    backgroundColor: '#EF4444',
+                    backgroundColor: 'var(--garden-playhead)',
                   }}
                 />
               )}
             </div>
             <div
-              className="relative h-[60px] mt-4 border-t border-white/20 pointer-events-auto"
+              className="relative h-[60px] mt-4 border-t border-[color:var(--garden-border)] pointer-events-auto"
               style={{ display: parkedSegments.length > 0 ? 'block' : 'none' }}
               data-parking-track
             >
-              <div className="absolute inset-0 bg-black/30 rounded pointer-events-none" />
+              <div className="absolute inset-0 rounded pointer-events-none bg-[color:color-mix(in_srgb,var(--garden-well)_70%,transparent)]" />
               <div className="relative h-full" style={{ width: `${timelineContainerWidth * timelineZoom}px` }}>
                 {parkedSegments.map((seg, idx) => {
                   const left = totalDuration > 0 ? `${(seg.start / totalDuration) * 100}%` : '0%';
@@ -1521,18 +1521,18 @@ export default function EditorPage() {
                     width,
                     height: '50%',
                     top: '25%',
-                    backgroundColor: isUnmatched ? '#1A1508' : '#132419',
+                    backgroundColor: isUnmatched ? 'var(--garden-unmatched-bg)' : 'var(--garden-seg-bg)',
                     borderColor:
                       (movingSegmentId === seg.segment_id && isSnapping)
-                        ? '#22C55E'
+                        ? 'var(--garden-snap)'
                         : isUnmatched
-                          ? (selectedSegmentId === seg.segment_id ? '#3DBA6F' : '#6B5A1A')
-                          : (selectedSegmentId === seg.segment_id ? '#3DBA6F' : '#2A4A35'),
+                          ? (selectedSegmentId === seg.segment_id ? 'var(--garden-accent)' : 'var(--garden-unmatched-border)')
+                          : (selectedSegmentId === seg.segment_id ? 'var(--garden-accent)' : 'var(--garden-seg-border)'),
                     borderStyle: isUnmatched ? 'dashed' : 'solid',
                     boxShadow:
                       movingSegmentId === seg.segment_id
-                        ? (isSnapping ? '0 0 0 3px #F0C040' : '0 0 0 2px #F0C040')
-                        : selectedSegmentId === seg.segment_id ? '0 0 0 2px #3DBA6F' : 'none',
+                        ? (isSnapping ? '0 0 0 3px var(--garden-gold)' : '0 0 0 2px var(--garden-gold)')
+                        : selectedSegmentId === seg.segment_id ? '0 0 0 2px var(--garden-accent)' : 'none',
                     opacity: isUnmatched ? 0.75 : 1,
                     zIndex: (movingSegmentId === seg.segment_id || selectedSegmentId === seg.segment_id) ? 10 : 1,
                     cursor: movingSegmentId === seg.segment_id ? 'move' : undefined,
@@ -1632,13 +1632,13 @@ export default function EditorPage() {
                           width={32}
                           height={20}
                         />
-                        <span className="text-xs text-white/70">PARKED Scene {idx + 1}</span>
+                        <span className="text-xs text-[color:var(--garden-text-soft)]">PARKED Scene {idx + 1}</span>
                       </div>
                     </div>
                   );
                 })}
               </div>
-              <div className="absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] text-white/50 tracking-widest">
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] text-[color:var(--garden-step-muted)] tracking-widest">
                 PARKING TRACK (drag clips here to park • drag up to restore)
               </div>
             </div>
@@ -1647,22 +1647,22 @@ export default function EditorPage() {
       </main>
 
       {showExportOverlay && (
-        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center">
-          <div className="rounded-2xl p-8 w-96" style={{ backgroundColor: '#132419' }}>
-            <p className="text-white mb-2">{exportStatus || 'Preparing…'}</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'var(--garden-overlay)' }}>
+          <div className="rounded-2xl p-8 w-96 border border-[color:var(--garden-border)] shadow-lg" style={{ backgroundColor: 'var(--garden-card)' }}>
+            <p className="text-[color:var(--garden-text)] mb-2">{exportStatus || 'Preparing…'}</p>
             {!exportError && !exportDone && (
-              <div className="h-2 w-full rounded-full bg-white/20 overflow-hidden mb-4">
-                <div className="h-full bg-[#3DBA6F] animate-pulse" style={{ width: '60%' }} />
+              <div className="h-2 w-full rounded-full overflow-hidden mb-4" style={{ backgroundColor: 'var(--garden-well)' }}>
+                <div className="h-full animate-pulse" style={{ width: '60%', backgroundColor: 'var(--garden-accent)' }} />
               </div>
             )}
-            {exportError && <p className="text-red-500 text-sm mb-4">{exportError}</p>}
+            {exportError && <p className="text-[color:var(--garden-danger)] text-sm mb-4">{exportError}</p>}
             {exportDone && (
               <a
                 href={fileUrl(id, 'output.mp4')}
                 download
                 target="_blank"
                 rel="noreferrer"
-                className="block text-[#3DBA6F] font-medium mb-4 hover:underline"
+                className="block text-[color:var(--garden-accent)] font-medium mb-4 hover:underline"
               >
                 Download output.mp4
               </a>
@@ -1678,8 +1678,8 @@ export default function EditorPage() {
                   setExportDone(false);
                 }}
                 disabled={!exportDone && !exportError}
-                className="rounded px-4 py-2 text-sm font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ backgroundColor: '#3DBA6F' }}
+                className="rounded px-4 py-2 text-sm font-medium text-[color:var(--garden-cream)] disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ backgroundColor: 'var(--garden-accent)' }}
               >
                 Close
               </button>
@@ -1687,8 +1687,8 @@ export default function EditorPage() {
                 <button
                   type="button"
                   onClick={async () => { try { await stepComplete(id, 6); } catch {} router.push(`/project/${encodeProjectIdForRoute(id)}#step-7`); }}
-                  className="rounded px-4 py-2 text-sm font-medium text-white"
-                  style={{ backgroundColor: '#2A4A35' }}
+                  className="rounded px-4 py-2 text-sm font-medium text-[color:var(--garden-cream)]"
+                  style={{ backgroundColor: 'var(--garden-accent-hover)' }}
                 >
                   Next Step →
                 </button>

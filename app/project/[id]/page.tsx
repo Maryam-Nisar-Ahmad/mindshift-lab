@@ -25,6 +25,98 @@ const STEPS = [
   { num: 8, name: 'Final Review' },
 ];
 
+/** Per-step accent for left stripe + soft tint (cycles). */
+const STEP_STRIPE_COLORS = [
+  'var(--garden-petal-deep)',
+  'var(--garden-lilac)',
+  'var(--garden-blue)',
+  'var(--garden-warning)',
+  'var(--garden-leaf-stem)',
+  'var(--garden-accent)',
+  'var(--garden-missing)',
+  'var(--garden-petal)',
+  'var(--garden-amber)',
+  'var(--garden-danger)',
+  'var(--garden-border-strong)',
+];
+
+function StepStatusPill({
+  viewingStep,
+  num,
+  currentStep,
+}: {
+  viewingStep: number | null;
+  num: number;
+  currentStep: number;
+}) {
+  if (viewingStep === num) {
+    return (
+      <span
+        className="fun-display inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold"
+        style={{
+          backgroundColor: 'color-mix(in srgb, var(--garden-blue) 24%, white)',
+          color: 'var(--garden-text)',
+          border: '1px solid color-mix(in srgb, var(--garden-blue) 40%, transparent)',
+        }}
+      >
+        <span aria-hidden>👀</span> Viewing
+      </span>
+    );
+  }
+  if (currentStep === num) {
+    if (viewingStep != null) {
+      return (
+        <span
+          className="fun-display inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--garden-warning) 35%, var(--garden-card))',
+            color: 'var(--garden-text)',
+          }}
+        >
+          <span aria-hidden>📍</span> Your progress
+        </span>
+      );
+    }
+    return (
+      <span
+        className="fun-display inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold shadow-sm"
+        style={{
+          background: 'linear-gradient(135deg, var(--garden-accent) 0%, var(--garden-leaf-stem) 100%)',
+          color: 'var(--garden-cream)',
+        }}
+      >
+        <span aria-hidden>✨</span> Active
+      </span>
+    );
+  }
+  if (currentStep > num) {
+    return (
+      <span
+        className="fun-display inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold"
+        style={{
+          backgroundColor: 'color-mix(in srgb, var(--garden-accent) 16%, var(--garden-card))',
+          color: 'var(--garden-accent-hover)',
+          border: '1px solid color-mix(in srgb, var(--garden-accent) 28%, transparent)',
+        }}
+      >
+        <span aria-hidden>✓</span> Done
+      </span>
+    );
+  }
+  const isNextPending = STEPS.find((s) => currentStep < s.num)?.num === num;
+  return (
+    <span
+      className="fun-display inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold"
+      style={{
+        backgroundColor: 'color-mix(in srgb, var(--garden-step-muted) 12%, var(--garden-card))',
+        color: 'var(--garden-text-soft)',
+      }}
+    >
+      <span aria-hidden>{isNextPending ? '🌱' : '○'}</span> {isNextPending ? 'Next' : 'Later'}
+    </span>
+  );
+}
+
 function Step8FieldCopyButton({
   ariaLabel,
   copied,
@@ -38,11 +130,14 @@ function Step8FieldCopyButton({
     <button
       type="button"
       aria-label={ariaLabel}
-      className="absolute top-2 right-2 z-10 rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+      className="absolute top-2 right-2 z-10 rounded-md p-1.5 transition-colors hover:opacity-90"
+      style={{ color: 'var(--garden-text-soft)' }}
       onClick={onCopy}
     >
       {copied ? (
-        <span className="text-xs font-medium text-emerald-400">✓</span>
+        <span className="text-xs font-medium" style={{ color: 'var(--garden-accent)' }}>
+          ✓
+        </span>
       ) : (
         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
           <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
@@ -144,6 +239,7 @@ export default function ProjectPage() {
 
   const currentStep = typeof project?.current_step === 'number' ? project.current_step : Number(project?.current_step ?? 0);
   const displayStep = viewingStep ?? currentStep;
+  const heroStepIndex = STEPS.findIndex((s) => s.num === currentStep);
   useEffect(() => {
     const key = String(currentStep);
     if (!Number.isFinite(currentStep)) return;
@@ -443,28 +539,36 @@ export default function ProjectPage() {
   if (!project) {
     return (
       <>
-        <header className="sticky top-0 z-10 flex h-14 items-center px-6" style={{ backgroundColor: '#132419' }}>
-          <button type="button" onClick={handleBackClick} className="mr-3 text-white/80 hover:text-white" aria-label="Back">
+        <header
+          className="fun-app-header sticky top-0 z-10 flex h-14 items-center px-6"
+          style={{ backgroundColor: 'color-mix(in srgb, var(--garden-card) 82%, transparent)' }}
+        >
+          <button type="button" onClick={handleBackClick} className="mr-3 hover:opacity-75"
+          style={{ color: 'var(--garden-text-soft)' }} aria-label="Back">
             ←
           </button>
-          <span style={{ color: '#3DBA6F' }}>MindShift Lab</span>
+          <span className="fun-display text-lg font-bold tracking-tight" style={{ color: 'var(--garden-accent)' }}>
+            MindShift Lab <span className="fun-brand-leaf" aria-hidden>🌿</span>
+          </span>
         </header>
-        <div className="min-h-screen overflow-y-auto px-6 py-8" style={{ backgroundColor: '#0D1A12' }}>
+        <div className="min-h-screen overflow-y-auto px-6 py-8" style={{ backgroundColor: 'var(--garden-surface)' }}>
           {projectError ? (
             <div className="max-w-md space-y-4">
-              <p className="text-red-400">{projectError}</p>
-              <p className="text-white/60 text-sm">Check that the backend is running and the project folder still exists under videos/.</p>
+              <p style={{ color: 'var(--garden-danger)' }}>{projectError}</p>
+              <p className="text-sm" style={{ color: 'var(--garden-text-soft)' }}>
+                Check that the backend is running and the project folder still exists under videos/.
+              </p>
               <button
                 type="button"
-                className="rounded px-3 py-1.5 text-sm text-white"
-                style={{ backgroundColor: '#3DBA6F' }}
+                className="rounded px-3 py-1.5 text-sm font-medium"
+                style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                 onClick={handleBackClick}
               >
                 Back to home
               </button>
             </div>
           ) : (
-            <p className="text-white/70">Loading…</p>
+            <p style={{ color: 'var(--garden-text-soft)' }}>Loading…</p>
           )}
         </div>
         {toasts.length > 0 && (
@@ -480,27 +584,43 @@ export default function ProjectPage() {
 
   return (
     <>
-      <header className="sticky top-0 z-10 flex h-14 items-center px-6" style={{ backgroundColor: '#132419' }}>
-        <button type="button" onClick={handleBackClick} className="mr-3 text-white/80 hover:text-white" aria-label="Back">
+      <header
+        className="fun-app-header sticky top-0 z-10 flex h-14 items-center px-6"
+        style={{ backgroundColor: 'color-mix(in srgb, var(--garden-card) 82%, transparent)' }}
+      >
+        <button type="button" onClick={handleBackClick} className="mr-3 hover:opacity-75"
+          style={{ color: 'var(--garden-text-soft)' }} aria-label="Back">
           ←
         </button>
-        <span style={{ color: '#3DBA6F' }}>MindShift Lab</span>
+        <span className="fun-display text-lg font-bold tracking-tight" style={{ color: 'var(--garden-accent)' }}>
+          MindShift Lab <span className="fun-brand-leaf" aria-hidden>🌿</span>
+        </span>
       </header>
 
       {viewingStep != null && Number.isFinite(currentStep) && (
         <div
-          className="sticky top-14 z-10 mx-6 mt-2 flex flex-col gap-2 rounded-xl border border-amber-500/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
-          style={{ backgroundColor: '#1a2e22' }}
+          className="sticky top-14 z-10 mx-6 mt-2 flex flex-col gap-2 rounded-2xl px-4 py-3 sm:flex-row sm:items-center sm:justify-between shadow-md"
+          style={{
+            backgroundColor: 'var(--garden-banner)',
+            border: '2px solid var(--garden-amber)',
+          }}
         >
-          <p className="text-sm text-white/90">
-            Viewing step <span className="font-semibold text-amber-200">{viewingStep}</span>
+          <p className="fun-display text-sm font-medium" style={{ color: 'var(--garden-text)' }}>
+            Viewing step{' '}
+            <span className="font-semibold" style={{ color: 'var(--garden-amber)' }}>
+              {viewingStep}
+            </span>
             {' — '}
-            your saved progress remains step <span className="font-semibold text-[#3DBA6F]">{currentStep}</span>.
+            your saved progress remains step{' '}
+            <span className="font-semibold" style={{ color: 'var(--garden-accent)' }}>
+              {currentStep}
+            </span>
+            .
           </p>
           <button
             type="button"
-            className="shrink-0 rounded-lg px-3 py-1.5 text-sm font-medium text-white"
-            style={{ backgroundColor: '#3DBA6F' }}
+            className="fun-display shrink-0 rounded-xl px-3 py-1.5 text-sm font-bold transition-transform hover:scale-[1.02]"
+            style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
             onClick={() => setViewingStep(null)}
           >
             Return to current step
@@ -509,44 +629,73 @@ export default function ProjectPage() {
       )}
 
       {(project?.current_step ?? 0) > 8 && (
-        <div className="sticky top-14 z-10 mx-6 mt-2 flex justify-between items-center rounded-xl p-4 text-white" style={{ backgroundColor: '#3DBA6F' }}>
-          <span>Video Complete! Ready to download.</span>
-          <a href={fileUrl(id, 'output.mp4')} download className="underline font-medium hover:no-underline">Download</a>
+        <div
+          className="fun-display sticky top-14 z-10 mx-6 mt-2 flex justify-between items-center rounded-2xl border-2 p-4 font-bold shadow-lg"
+          style={{
+            backgroundColor: 'var(--garden-accent)',
+            color: 'var(--garden-cream)',
+            borderColor: 'var(--garden-border-strong)',
+          }}
+        >
+          <span>🎬 Video complete — grab your file!</span>
+          <a href={fileUrl(id, 'output.mp4')} download className="underline font-medium hover:no-underline">
+            Download
+          </a>
         </div>
       )}
 
-      <main className="min-h-screen overflow-y-auto px-6 py-8 max-w-3xl mx-auto" style={{ backgroundColor: '#0D1A12' }}>
-        <h1 className="text-xl font-semibold text-white mb-8">{project.title}</h1>
+      <main className="min-h-screen overflow-y-auto px-6 py-8 max-w-3xl mx-auto" style={{ backgroundColor: 'var(--garden-surface)' }}>
+        <div className="mb-8">
+          <h1
+            className="fun-display text-2xl sm:text-3xl font-bold leading-tight tracking-tight"
+            style={{ color: 'var(--garden-text)', textShadow: '0 1px 0 var(--garden-leaf-soft)' }}
+          >
+            {project.title}
+          </h1>
+          <p className="fun-display mt-3 text-sm sm:text-base font-medium" style={{ color: 'var(--garden-text-soft)' }}>
+            {(project?.current_step ?? 0) > 8
+              ? '🎉 All steps complete — celebrate your video!'
+              : heroStepIndex >= 0
+                ? `You're on step ${heroStepIndex + 1} of ${STEPS.length} — little wins add up!`
+                : '🌱 Pick up where you left off — your steps are waiting.'}
+          </p>
+        </div>
 
         {STEPS.map(({ num, name }) => {
           const complete = currentStep > num;
           const active = viewingStep === num || (viewingStep == null && currentStep === num);
           const key = String(num);
           const expanded = active || (!!everActiveSteps[key] && !!manuallyExpandedSteps[key]);
+          const stepIdx = STEPS.findIndex((s) => s.num === num);
+          const stripe = STEP_STRIPE_COLORS[stepIdx % STEP_STRIPE_COLORS.length];
 
           return (
             <div
               key={num}
               id={num === 7 ? 'step-7' : `step-panel-${String(num).replace(/\./g, '-')}`}
-              className="rounded-xl p-5 mb-4"
+              className={`fun-step-card p-5 mb-4 ${active ? 'fun-step-card-active' : ''}`}
               style={{
-                backgroundColor: '#132419',
-                border: active ? '1px solid #3DBA6F' : undefined,
+                backgroundImage: `linear-gradient(145deg, var(--garden-card) 0%, color-mix(in srgb, ${stripe} 16%, var(--garden-card)) 100%)`,
+                border: active ? '2px solid var(--garden-accent)' : '2px solid color-mix(in srgb, var(--garden-border) 55%, transparent)',
+                borderLeft: `5px solid ${stripe}`,
               }}
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-3 min-w-0">
                   <span
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-medium text-white"
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold transition-all ${active ? 'fun-step-badge-pulse' : ''}`}
                     style={{
-                      backgroundColor: currentStep >= num || viewingStep === num ? '#3DBA6F' : '#6B7280',
+                      backgroundColor:
+                        currentStep >= num || viewingStep === num ? 'var(--garden-accent)' : 'var(--garden-step-muted)',
+                      color: 'var(--garden-cream)',
                     }}
                   >
                     {num}
                   </span>
                   <button
                     type="button"
-                    className="font-bold text-white text-left hover:opacity-90"
+                    className="fun-display font-bold text-left hover:opacity-90 text-base sm:text-lg min-w-0"
+                    style={{ color: 'var(--garden-text)' }}
                     onClick={() => {
                       if (!active && !complete && !everActiveSteps[key]) return;
                       setManuallyExpandedSteps((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -555,23 +704,18 @@ export default function ProjectPage() {
                     {name}
                   </button>
                 </div>
-                <span className="text-sm text-white/70">
-                  {viewingStep === num && 'Viewing'}
-                  {viewingStep !== num && currentStep === num && (viewingStep != null ? 'Your progress' : 'Active')}
-                  {viewingStep !== num && currentStep > num && 'Completed'}
-                  {viewingStep !== num && currentStep < num && 'Pending'}
-                </span>
+                <StepStatusPill viewingStep={viewingStep} num={num} currentStep={currentStep} />
               </div>
 
               {expanded && (
                 <div className="mt-4">
                   {num === 1 && (
                     <>
-                      <div className="rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: '#0D1A12', borderLeftColor: '#3DBA6F', color: '#F0F4F0' }}>
+                      <div className="rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: 'var(--garden-surface)', borderLeftColor: 'var(--garden-accent)', color: 'var(--garden-text)' }}>
                         <button
                           type="button"
                           className="absolute top-2 right-2 rounded px-2 py-1 text-xs"
-                          style={{ backgroundColor: '#132419', color: '#F0F4F0' }}
+                          style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text)' }}
                           onClick={() => {
                             if (step1Template) {
                               navigator.clipboard.writeText(step1Template);
@@ -589,12 +733,12 @@ export default function ProjectPage() {
                         value={step1Title}
                         onChange={(e) => setStep1Title(e.target.value)}
                         placeholder="Title"
-                        className="mt-3 w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-white placeholder:text-white/40"
+                        className="garden-input-field mt-3 w-full rounded-xl px-3 py-2 placeholder:opacity-50"
                       />
                       <button
                         type="button"
-                        className="mt-2 rounded px-3 py-1.5 text-sm font-medium text-white"
-                        style={{ backgroundColor: '#3DBA6F' }}
+                        className="mt-2 rounded px-3 py-1.5 text-sm font-medium"
+                        style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                           onClick={() => {
                             if (!id) return;
                             updateTitle(id, step1Title)
@@ -609,11 +753,11 @@ export default function ProjectPage() {
                   )}
                   {num === 2 && (
                     <>
-                      <div className="rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: '#0D1A12', borderLeftColor: '#3DBA6F', color: '#F0F4F0' }}>
+                      <div className="rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: 'var(--garden-surface)', borderLeftColor: 'var(--garden-accent)', color: 'var(--garden-text)' }}>
                         <button
                           type="button"
                           className="absolute top-2 right-2 rounded px-2 py-1 text-xs"
-                          style={{ backgroundColor: '#132419', color: '#F0F4F0' }}
+                          style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text)' }}
                           onClick={() => {
                             const text = ((step2Template ?? '') + (project?.title ? '\n\n' + project.title : '')).trim();
                             if (text) {
@@ -631,13 +775,14 @@ export default function ProjectPage() {
                         value={step2Script}
                         onChange={(e) => setStep2Script(e.target.value)}
                         placeholder="Paste your script from Claude here..."
-                        className="mt-3 w-full h-64 rounded font-mono text-sm resize-y border focus:border-[#3DBA6F] focus:outline-none"
-                        style={{ backgroundColor: '#0D1A12', borderColor: '#2A4A35' }}
+                        className="mt-3 w-full h-64 rounded font-mono text-sm resize-y border focus:border-[color:var(--garden-accent)] focus:outline-none"
+                        style={{ backgroundColor: 'var(--garden-surface)', borderColor: 'var(--garden-border)' }}
                       />
                       <div className="mt-2 flex gap-2">
                         <button
                           type="button"
-                          className="rounded px-3 py-1.5 text-sm font-medium border border-amber-500 text-amber-500 hover:bg-amber-500/10"
+                          className="rounded-xl border-2 px-3 py-1.5 text-sm font-medium transition-colors hover:opacity-90"
+                          style={{ borderColor: 'var(--garden-amber)', color: 'var(--garden-text)' }}
                           onClick={() => {
                             if (!id || !step2Script.trim()) return;
                             cleanScript(id, step2Script)
@@ -649,8 +794,8 @@ export default function ProjectPage() {
                         </button>
                         <button
                           type="button"
-                          className="rounded px-3 py-1.5 text-sm font-medium text-white"
-                          style={{ backgroundColor: '#3DBA6F' }}
+                          className="rounded px-3 py-1.5 text-sm font-medium"
+                          style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                           onClick={() => {
                             if (!id) return;
                             saveScript(id, step2Script, true)
@@ -667,8 +812,8 @@ export default function ProjectPage() {
                   {num === 3 && (
                     <>
                       {step3JobId ? (
-                        <div className="mt-4 flex items-center gap-2 text-white/80">
-                          <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[#3DBA6F] border-t-transparent" />
+                        <div className="mt-4 flex items-center gap-2" style={{ color: 'var(--garden-text-soft)' }}>
+                          <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[color:var(--garden-accent)] border-t-transparent" />
                           {step3JobStatusText || 'Processing...'}
                         </div>
                       ) : step3Prompts && step3Prompts.length > 0 ? (
@@ -686,8 +831,8 @@ export default function ProjectPage() {
                       ) : (
                         <button
                           type="button"
-                          className="mt-4 rounded px-3 py-1.5 text-sm font-medium text-white"
-                          style={{ backgroundColor: '#3DBA6F' }}
+                          className="mt-4 rounded px-3 py-1.5 text-sm font-medium"
+                          style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                           onClick={() => {
                             if (!id) return;
                             generatePrompts(id)
@@ -707,10 +852,13 @@ export default function ProjectPage() {
                   )}
                   {num === 3.5 && (
                     <>
-                      <p className="mt-4 text-white/80 text-sm">Save images as 1.png 2.png... into images/ folder.</p>
+                      <p className="mt-4 text-sm" style={{ color: 'var(--garden-text-soft)' }}>
+                        Save images as 1.png 2.png... into images/ folder.
+                      </p>
                       <button
                         type="button"
-                        className="mt-2 rounded px-3 py-1.5 text-sm font-medium border border-white/30 text-white/90 hover:bg-white/10"
+                        className="mt-2 rounded-xl border-2 px-3 py-1.5 text-sm font-medium transition-colors hover:opacity-90"
+                        style={{ borderColor: 'var(--garden-border-strong)', color: 'var(--garden-text)' }}
                         onClick={() => {
                           if (!id) return;
                           checkImages(id)
@@ -726,18 +874,24 @@ export default function ProjectPage() {
                       {imageCheckResult && (
                         <div className="mt-3 flex flex-wrap gap-2">
                           {(imageCheckResult.present ?? []).map((f) => (
-                            <span key={f} className="rounded-full px-2 py-0.5 text-xs font-medium text-white" style={{ backgroundColor: '#3DBA6F' }}>{f}</span>
+                            <span key={f} className="rounded-full px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}>{f}</span>
                           ))}
                           {(imageCheckResult.missing ?? []).map((f) => (
-                            <span key={f} className="rounded-full px-2 py-0.5 text-xs font-medium text-white bg-red-600">{f}</span>
+                            <span
+                              key={f}
+                              className="rounded-full px-2 py-0.5 text-xs font-medium"
+                              style={{ backgroundColor: 'var(--garden-danger)', color: 'var(--garden-cream)' }}
+                            >
+                              {f}
+                            </span>
                           ))}
                         </div>
                       )}
                       {imageCheckResult && imageCheckResult.total_expected > 0 && imageCheckResult.missing?.length === 0 && (
                         <button
                           type="button"
-                          className="mt-3 rounded px-3 py-1.5 text-sm font-medium text-white"
-                          style={{ backgroundColor: '#3DBA6F' }}
+                          className="mt-3 rounded px-3 py-1.5 text-sm font-medium"
+                          style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                           onClick={() => {
                             if (!id) return;
                             stepComplete(id, 3.5)
@@ -752,11 +906,11 @@ export default function ProjectPage() {
                   )}
                   {num === 4 && (
                     <>
-                      <div className="mt-4 rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: '#0D1A12', borderLeftColor: '#3DBA6F', color: '#F0F4F0' }}>
+                      <div className="mt-4 rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: 'var(--garden-surface)', borderLeftColor: 'var(--garden-accent)', color: 'var(--garden-text)' }}>
                         <button
                           type="button"
                           className="absolute top-2 right-2 rounded px-2 py-1 text-xs"
-                          style={{ backgroundColor: '#132419', color: '#F0F4F0' }}
+                          style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text)' }}
                           onClick={() => {
                             const text = (step4Template ?? '').trim() + (step4CustomInput.trim() ? "\n\n" + step4CustomInput.trim() : "");
                             if (text) {
@@ -770,7 +924,9 @@ export default function ProjectPage() {
                         </button>
                         <pre className="whitespace-pre-wrap pr-16">{step4Template ?? 'Loading…'}</pre>
                       </div>
-                      <p className="mt-3 text-sm font-medium text-white/90">Add custom notes (optional)</p>
+                      <p className="mt-3 text-sm font-medium" style={{ color: 'var(--garden-text)' }}>
+                        Add custom notes (optional)
+                      </p>
                       <input
                         type="text"
                         value={step4CustomInput}
@@ -779,12 +935,12 @@ export default function ProjectPage() {
                           localStorage.setItem(`step4CustomInput_${id}`, e.target.value);
                         }}
                         placeholder="e.g. add specific instructions..."
-                        className="mt-3 w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-white placeholder:text-white/40"
+                        className="garden-input-field mt-3 w-full rounded-xl px-3 py-2 placeholder:opacity-50"
                       />
                       <button
                         type="button"
-                        className="mt-3 rounded px-3 py-1.5 text-sm font-medium text-white"
-                        style={{ backgroundColor: '#3DBA6F' }}
+                        className="mt-3 rounded px-3 py-1.5 text-sm font-medium"
+                        style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                         onClick={() => {
                           if (!id) return;
                           stepComplete(id, 4, 4.1)
@@ -799,14 +955,16 @@ export default function ProjectPage() {
                   )}
                   {num === 4.1 && (
                     <>
-                      <h2 className="mt-4 text-lg font-semibold text-white">Thumbnail Review</h2>
-                      <div className="mt-3 rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto font-mono text-sm" style={{ backgroundColor: '#0D1A12', borderLeftColor: '#3DBA6F', color: '#F0F4F0' }}>
+                      <h2 className="mt-4 text-lg font-semibold" style={{ color: 'var(--garden-text)' }}>
+                        Thumbnail Review
+                      </h2>
+                      <div className="mt-3 rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto font-mono text-sm" style={{ backgroundColor: 'var(--garden-surface)', borderLeftColor: 'var(--garden-accent)', color: 'var(--garden-text)' }}>
                         <pre className="whitespace-pre-wrap">{thumbnailReviewPrompt || 'Loading…'}</pre>
                       </div>
                       <button
                         type="button"
                         className="mt-2 rounded px-2 py-1 text-xs"
-                        style={{ backgroundColor: '#132419', color: '#F0F4F0' }}
+                        style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text)' }}
                         onClick={() => {
                           const extra = step4CustomInput.trim();
                           const text = thumbnailReviewPrompt + (extra ? '\n\n' + extra : '');
@@ -817,8 +975,8 @@ export default function ProjectPage() {
                       </button>
                       <button
                         type="button"
-                        className="mt-3 rounded px-3 py-1.5 text-sm font-medium text-white"
-                        style={{ backgroundColor: '#3DBA6F' }}
+                        className="mt-3 rounded px-3 py-1.5 text-sm font-medium"
+                        style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                         onClick={() => {
                           if (!id) return;
                           stepComplete(id, 4.1, 4.5)
@@ -833,12 +991,12 @@ export default function ProjectPage() {
                   )}
                   {num === 4.5 && (
                     <>
-                      <p className="mt-4 text-sm font-medium" style={{ color: '#3DBA6F' }}>Your Recording Script</p>
-                      <div className="mt-2 rounded-lg p-4 border-l-4 font-mono text-sm max-h-80 overflow-y-auto relative" style={{ backgroundColor: '#0D1A12', borderLeftColor: '#3DBA6F', color: '#F0F4F0' }}>
+                      <p className="mt-4 text-sm font-medium" style={{ color: 'var(--garden-accent)' }}>Your Recording Script</p>
+                      <div className="mt-2 rounded-lg p-4 border-l-4 font-mono text-sm max-h-80 overflow-y-auto relative" style={{ backgroundColor: 'var(--garden-surface)', borderLeftColor: 'var(--garden-accent)', color: 'var(--garden-text)' }}>
                         <button
                           type="button"
                           className="absolute top-2 right-2 rounded px-2 py-1 text-xs"
-                          style={{ backgroundColor: '#132419', color: '#F0F4F0' }}
+                          style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text)' }}
                           onClick={() => {
                             if (!step4_5Script) return;
                             navigator.clipboard.writeText(step4_5Script);
@@ -850,12 +1008,14 @@ export default function ProjectPage() {
                         </button>
                         <pre className="whitespace-pre-wrap pr-16">{step4_5Script || 'Loading…'}</pre>
                       </div>
-                      <p className="mt-4 text-white/80">Save your audio file here:</p>
-                      <p className="mt-1 font-mono text-sm" style={{ color: '#3DBA6F' }}>MindShift-Lab/videos/{id}/audio.mp3</p>
+                      <p className="mt-4" style={{ color: 'var(--garden-text-soft)' }}>
+                        Save your audio file here:
+                      </p>
+                      <p className="mt-1 font-mono text-sm" style={{ color: 'var(--garden-accent)' }}>MindShift-Lab/videos/{id}/audio.mp3</p>
                       <button
                         type="button"
-                        className="mt-3 rounded px-3 py-1.5 text-sm font-medium text-white"
-                        style={{ backgroundColor: '#3DBA6F' }}
+                        className="mt-3 rounded px-3 py-1.5 text-sm font-medium"
+                        style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                         onClick={() => {
                           if (!id) return;
                           stepComplete(id, 4.5, 5)
@@ -872,7 +1032,7 @@ export default function ProjectPage() {
                     <>
                       <div
                         className="mt-4 rounded-xl p-8 text-center border-2 border-dashed"
-                        style={{ backgroundColor: '#0A1510', borderColor: '#2A4A35' }}
+                        style={{ backgroundColor: 'var(--garden-timeline)', borderColor: 'var(--garden-border)' }}
                         onDrop={(e) => {
                           e.preventDefault();
                           const file = e.dataTransfer.files[0];
@@ -892,33 +1052,41 @@ export default function ProjectPage() {
                           }}
                         />
                         {step5Status === 'idle' && (
-                          <label htmlFor="step5-file" className="cursor-pointer text-white/80 hover:text-white">
+                          <label
+                            htmlFor="step5-file"
+                            className="cursor-pointer hover:opacity-80"
+                            style={{ color: 'var(--garden-text-soft)' }}
+                          >
                             Drop .mp3 here or click to browse
                           </label>
                         )}
                         {step5Status === 'transcribing' && (
-                          <div className="flex items-center justify-center gap-2 text-white/80">
+                          <div className="flex items-center justify-center gap-2" style={{ color: 'var(--garden-text-soft)' }}>
                             <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
                             transcribing
                           </div>
                         )}
                         {step5Status === 'correcting' && (
-                          <div className="flex items-center justify-center gap-2 text-white/80">
+                          <div className="flex items-center justify-center gap-2" style={{ color: 'var(--garden-text-soft)' }}>
                             <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
                             correcting
                           </div>
                         )}
                         {step5Status === 'done' && step5Result && (
-                          <div className="rounded-xl p-4 text-left border border-[#3DBA6F]" style={{ backgroundColor: '#0D1A12' }}>
-                            <p className="text-white font-mono text-sm">
+                          <div className="rounded-xl p-4 text-left border border-[color:var(--garden-accent)]" style={{ backgroundColor: 'var(--garden-surface)' }}>
+                            <p className="font-mono text-sm" style={{ color: 'var(--garden-text)' }}>
                               duration {Math.floor((step5Result.duration_sec ?? 0) / 60)}:{(String((step5Result.duration_sec ?? 0) % 60)).padStart(2, '0')}
                             </p>
-                            <p className="text-white/80 text-sm">word count {step5Result.word_count ?? 0}</p>
-                            <p className="text-white/80 text-sm">words corrected {step5Result.words_corrected ?? 0}</p>
+                            <p className="text-sm" style={{ color: 'var(--garden-text-soft)' }}>
+                              word count {step5Result.word_count ?? 0}
+                            </p>
+                            <p className="text-sm" style={{ color: 'var(--garden-text-soft)' }}>
+                              words corrected {step5Result.words_corrected ?? 0}
+                            </p>
                             <button
                               type="button"
-                              className="mt-3 rounded px-3 py-1.5 text-sm font-medium text-white"
-                              style={{ backgroundColor: '#3DBA6F' }}
+                              className="mt-3 rounded px-3 py-1.5 text-sm font-medium"
+                              style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                               onClick={() => {
                                 assembleSegments(id)
                                   .then(() => router.push('/project/' + encodeProjectIdForRoute(id) + '/editor'))
@@ -930,7 +1098,14 @@ export default function ProjectPage() {
                           </div>
                         )}
                         {step5Status === 'error' && (
-                          <div className="rounded-xl p-4 text-left bg-red-900/30 border border-red-600 text-red-200 text-sm">
+                          <div
+                            className="rounded-xl border-2 p-4 text-left text-sm"
+                            style={{
+                              backgroundColor: 'var(--garden-danger-soft)',
+                              borderColor: 'var(--garden-danger)',
+                              color: 'var(--garden-text)',
+                            }}
+                          >
                             {step5Error ?? 'Error'}
                           </div>
                         )}
@@ -939,14 +1114,18 @@ export default function ProjectPage() {
                   )}
                   {num === 6 && (
                     <>
-                      <p className="mt-4 text-white/85 text-sm leading-relaxed">
+                      <p className="mt-4 text-sm leading-relaxed" style={{ color: 'var(--garden-text-soft)' }}>
                         The timeline, segments, subtitles, and export tools live in the{' '}
-                        <span className="text-white font-medium">assembly editor</span>. Open it anytime to change your edit — your saved project step stays where it is until you finish later steps.
+                        <span className="font-semibold" style={{ color: 'var(--garden-text)' }}>
+                          assembly editor
+                        </span>
+                        . Open it anytime to change your edit — your saved project step stays where it is until you finish
+                        later steps.
                       </p>
                       <button
                         type="button"
-                        className="mt-4 rounded px-3 py-2 text-sm font-medium text-white w-full sm:w-auto"
-                        style={{ backgroundColor: '#3DBA6F' }}
+                        className="mt-4 rounded-xl px-4 py-2 text-sm font-semibold shadow-sm transition-all hover:brightness-105 w-full sm:w-auto"
+                        style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                         onClick={() => {
                           if (!id) return;
                           router.push('/project/' + encodeProjectIdForRoute(id) + '/editor');
@@ -958,11 +1137,11 @@ export default function ProjectPage() {
                   )}
                   {num === 7 && (
                     <>
-                      <div className="mt-4 rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: '#0D1A12', borderLeftColor: '#3DBA6F', color: '#F0F4F0' }}>
+                      <div className="mt-4 rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: 'var(--garden-surface)', borderLeftColor: 'var(--garden-accent)', color: 'var(--garden-text)' }}>
                         <button
                           type="button"
                           className="absolute top-2 right-2 rounded px-2 py-1 text-xs"
-                          style={{ backgroundColor: '#132419', color: '#F0F4F0' }}
+                          style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text)' }}
                           onClick={() => {
                             if (step7Combined) {
                               navigator.clipboard.writeText(step7Combined);
@@ -977,49 +1156,49 @@ export default function ProjectPage() {
                       </div>
                       <div className="mt-4 space-y-4">
                         <div>
-                          <label className="block text-sm text-zinc-400 mb-1">YouTube description</label>
+                          <label className="garden-label-soft block text-sm mb-1">YouTube description</label>
                           <textarea
                             value={seoYoutubeDescription}
                             onChange={(e) => setSeoYoutubeDescription(e.target.value)}
-                            className="w-full min-h-[120px] rounded font-mono text-sm resize-y border focus:border-[#3DBA6F] focus:outline-none p-3"
-                            style={{ backgroundColor: '#0D1A12', borderColor: '#2A4A35', color: '#F0F4F0' }}
+                            className="w-full min-h-[120px] rounded font-mono text-sm resize-y border focus:border-[color:var(--garden-accent)] focus:outline-none p-3"
+                            style={{ backgroundColor: 'var(--garden-surface)', borderColor: 'var(--garden-border)', color: 'var(--garden-text)' }}
                           />
                         </div>
                         <div>
-                          <label className="block text-sm text-zinc-400 mb-1">Chapter timestamps</label>
+                          <label className="garden-label-soft block text-sm mb-1">Chapter timestamps</label>
                           <textarea
                             value={seoChapterTimestamps}
                             onChange={(e) => setSeoChapterTimestamps(e.target.value)}
-                            className="w-full min-h-[100px] rounded font-mono text-sm resize-y border focus:border-[#3DBA6F] focus:outline-none p-3"
-                            style={{ backgroundColor: '#0D1A12', borderColor: '#2A4A35', color: '#F0F4F0' }}
+                            className="w-full min-h-[100px] rounded font-mono text-sm resize-y border focus:border-[color:var(--garden-accent)] focus:outline-none p-3"
+                            style={{ backgroundColor: 'var(--garden-surface)', borderColor: 'var(--garden-border)', color: 'var(--garden-text)' }}
                           />
                         </div>
                         <div>
-                          <label className="block text-sm text-zinc-400 mb-1">Tags</label>
+                          <label className="garden-label-soft block text-sm mb-1">Tags</label>
                           <textarea
                             value={seoTags}
                             onChange={(e) => setSeoTags(e.target.value)}
                             placeholder="Comma-separated or one per line"
-                            className="w-full min-h-[80px] rounded font-mono text-sm resize-y border focus:border-[#3DBA6F] focus:outline-none p-3"
-                            style={{ backgroundColor: '#0D1A12', borderColor: '#2A4A35', color: '#F0F4F0' }}
+                            className="w-full min-h-[80px] rounded font-mono text-sm resize-y border focus:border-[color:var(--garden-accent)] focus:outline-none p-3"
+                            style={{ backgroundColor: 'var(--garden-surface)', borderColor: 'var(--garden-border)', color: 'var(--garden-text)' }}
                           />
                         </div>
                         <div>
-                          <label className="block text-sm text-zinc-400 mb-1">SEO title</label>
+                          <label className="garden-label-soft block text-sm mb-1">SEO title</label>
                           <input
                             type="text"
                             value={seoTitleField}
                             onChange={(e) => setSeoTitleField(e.target.value)}
-                            className="w-full rounded font-mono text-sm border focus:border-[#3DBA6F] focus:outline-none p-3"
-                            style={{ backgroundColor: '#0D1A12', borderColor: '#2A4A35', color: '#F0F4F0' }}
+                            className="w-full rounded font-mono text-sm border focus:border-[color:var(--garden-accent)] focus:outline-none p-3"
+                            style={{ backgroundColor: 'var(--garden-surface)', borderColor: 'var(--garden-border)', color: 'var(--garden-text)' }}
                           />
                         </div>
                       </div>
                       <div className="mt-3">
                         <button
                           type="button"
-                          className="rounded px-3 py-1.5 text-sm font-medium text-white"
-                          style={{ backgroundColor: '#3DBA6F' }}
+                          className="rounded px-3 py-1.5 text-sm font-medium"
+                          style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                           onClick={() => {
                             if (!id) return;
                             const payload: SeoDataPayload = {
@@ -1047,15 +1226,17 @@ export default function ProjectPage() {
                     <>
                       {/* Final Review - Step 8 */}
                       <div className="space-y-6">
-                        <h3 className="text-lg font-semibold text-white">Final Review</h3>
+                        <h3 className="text-lg font-semibold" style={{ color: 'var(--garden-text)' }}>
+                          Final Review
+                        </h3>
 
                         <div>
-                          <label className="block text-sm text-zinc-400 mb-1">Video Title</label>
-                          <pre className="bg-zinc-900 p-4 rounded text-white whitespace-pre-wrap">{project?.title ?? '—'}</pre>
+                          <label className="garden-label-soft block text-sm mb-1">Video Title</label>
+                          <pre className="garden-pre p-4 rounded whitespace-pre-wrap">{project?.title ?? '—'}</pre>
                         </div>
 
                         <div>
-                          <label className="block text-sm text-zinc-400 mb-1">YouTube description</label>
+                          <label className="garden-label-soft block text-sm mb-1">YouTube description</label>
                           <div className="relative">
                             <Step8FieldCopyButton
                               ariaLabel="Copy YouTube description"
@@ -1065,13 +1246,13 @@ export default function ProjectPage() {
                             <textarea
                               value={seoYoutubeDescription}
                               onChange={(e) => setSeoYoutubeDescription(e.target.value)}
-                              className="w-full min-h-[120px] bg-zinc-900 text-white py-3 pl-4 pr-12 rounded border border-zinc-700 whitespace-pre-wrap"
+                              className="garden-input-field w-full min-h-[120px] py-3 pl-4 pr-12 rounded whitespace-pre-wrap"
                             />
                           </div>
                         </div>
 
                         <div>
-                          <label className="block text-sm text-zinc-400 mb-1">Chapter timestamps</label>
+                          <label className="garden-label-soft block text-sm mb-1">Chapter timestamps</label>
                           <div className="relative">
                             <Step8FieldCopyButton
                               ariaLabel="Copy chapter timestamps"
@@ -1081,13 +1262,13 @@ export default function ProjectPage() {
                             <textarea
                               value={seoChapterTimestamps}
                               onChange={(e) => setSeoChapterTimestamps(e.target.value)}
-                              className="w-full min-h-[100px] bg-zinc-900 text-white py-3 pl-4 pr-12 rounded border border-zinc-700 whitespace-pre-wrap"
+                              className="garden-input-field w-full min-h-[100px] py-3 pl-4 pr-12 rounded whitespace-pre-wrap"
                             />
                           </div>
                         </div>
 
                         <div>
-                          <label className="block text-sm text-zinc-400 mb-1">Tags</label>
+                          <label className="garden-label-soft block text-sm mb-1">Tags</label>
                           <div className="relative">
                             <Step8FieldCopyButton
                               ariaLabel="Copy tags"
@@ -1097,13 +1278,13 @@ export default function ProjectPage() {
                             <textarea
                               value={seoTags}
                               onChange={(e) => setSeoTags(e.target.value)}
-                              className="w-full min-h-[80px] bg-zinc-900 text-white py-3 pl-4 pr-12 rounded border border-zinc-700 whitespace-pre-wrap"
+                              className="garden-input-field w-full min-h-[80px] py-3 pl-4 pr-12 rounded whitespace-pre-wrap"
                             />
                           </div>
                         </div>
 
                         <div>
-                          <label className="block text-sm text-zinc-400 mb-1">SEO title</label>
+                          <label className="garden-label-soft block text-sm mb-1">SEO title</label>
                           <div className="relative">
                             <Step8FieldCopyButton
                               ariaLabel="Copy SEO title"
@@ -1114,14 +1295,17 @@ export default function ProjectPage() {
                               type="text"
                               value={seoTitleField}
                               onChange={(e) => setSeoTitleField(e.target.value)}
-                              className="w-full bg-zinc-900 text-white py-3 pl-4 pr-12 rounded border border-zinc-700"
+                              className="garden-input-field w-full py-3 pl-4 pr-12 rounded"
                             />
                           </div>
                         </div>
 
-                        <div className="pt-4 border-t border-zinc-700">
-                          <label className="block text-sm text-zinc-400 mb-1">Exported Video File Path</label>
-                          <div className="bg-zinc-900 p-4 rounded text-emerald-400 font-mono text-sm break-all">
+                        <div className="pt-4 border-t" style={{ borderColor: 'var(--garden-border)' }}>
+                          <label className="garden-label-soft block text-sm mb-1">Exported Video File Path</label>
+                          <div
+                            className="garden-pre p-4 rounded font-mono text-sm break-all"
+                            style={{ color: 'var(--garden-accent)' }}
+                          >
                             {(project as ProjectWithReviewMeta)?.exportedVideoPath || (project as ProjectWithReviewMeta)?.videoUrl || 'Video not exported yet. Click "Export Video" in previous step.'}
                           </div>
                         </div>
@@ -1145,14 +1329,15 @@ export default function ProjectPage() {
                               })
                               .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'));
                           }}
-                          className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 rounded font-medium"
+                          className="w-full py-3 rounded-xl font-semibold shadow-sm transition-all hover:brightness-105"
+                          style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                         >
                           Save &amp; Complete Project
                         </button>
                       </div>
                     </>
                   )}
-                  {num !== 1 && num !== 2 && num !== 3 && num !== 3.5 && num !== 4 && num !== 4.1 && num !== 4.5 && num !== 5 && num !== 6 && num !== 7 && num !== 8 && <div className="h-24 rounded-lg bg-white/5" />}
+                  {num !== 1 && num !== 2 && num !== 3 && num !== 3.5 && num !== 4 && num !== 4.1 && num !== 4.5 && num !== 5 && num !== 6 && num !== 7 && num !== 8 && <div className="h-24 rounded-xl border border-dashed" style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-well)' }} />}
                 </div>
               )}
 
@@ -1161,7 +1346,8 @@ export default function ProjectPage() {
                   <button
                     type="button"
                     onClick={() => handleGoBack(num)}
-                    className="text-sm text-gray-400 hover:text-gray-300"
+                    className="fun-display text-sm font-semibold underline decoration-2 underline-offset-4 transition-colors hover:opacity-90"
+                    style={{ color: 'var(--garden-accent-hover)', textDecorationColor: 'color-mix(in srgb, var(--garden-accent) 55%, transparent)' }}
                   >
                     Go Back
                   </button>
@@ -1175,7 +1361,8 @@ export default function ProjectPage() {
           <button
             type="button"
             onClick={handleResetVideoClick}
-            className="text-sm text-red-500 hover:text-red-400"
+            className="text-sm hover:opacity-90"
+            style={{ color: 'var(--garden-danger)' }}
           >
             Reset Video
           </button>
@@ -1184,41 +1371,51 @@ export default function ProjectPage() {
 
       {resetModal.open && 'step' in resetModal && (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/60"
+          className="fixed inset-0 z-40 flex items-center justify-center"
+          style={{ backgroundColor: 'var(--garden-overlay)' }}
           onClick={() => setResetModal({ open: false })}
         >
           <div
-            className="z-50 w-full max-w-sm rounded-xl p-6 shadow-xl"
-            style={{ backgroundColor: '#132419' }}
+            className="z-50 w-full max-w-sm rounded-2xl border-2 p-6 shadow-xl"
+            style={{ backgroundColor: 'var(--garden-card)', borderColor: 'var(--garden-border-strong)' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <p className="text-white mb-1 font-medium">Open this step again?</p>
-            <p className="text-white/65 text-sm mb-4 leading-relaxed">
-              <span className="text-white/85">View only</span> — read prompts and copy content; your saved step and files stay as they are.
+            <p className="mb-1 font-semibold" style={{ color: 'var(--garden-text)' }}>
+              Open this step again?
+            </p>
+            <p className="text-sm mb-4 leading-relaxed" style={{ color: 'var(--garden-text-soft)' }}>
+              <span className="font-medium" style={{ color: 'var(--garden-text)' }}>
+                View only
+              </span>{' '}
+              — read prompts and copy content; your saved step and files stay as they are.
               <br />
-              <span className="text-white/85">Reset from here</span> — delete work from this step onward so you can redo it (same as before).
+              <span className="font-medium" style={{ color: 'var(--garden-text)' }}>
+                Reset from here
+              </span>{' '}
+              — delete work from this step onward so you can redo it (same as before).
             </p>
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
               <button
                 type="button"
                 onClick={() => setResetModal({ open: false })}
-                className="rounded px-3 py-1.5 text-sm text-white/80 hover:text-white sm:order-1"
+                className="rounded-xl px-3 py-1.5 text-sm sm:order-1 border-2"
+                style={{ borderColor: 'var(--garden-border)', color: 'var(--garden-text-soft)' }}
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleViewStepOnly}
-                className="rounded px-3 py-1.5 text-sm font-medium text-white sm:order-2"
-                style={{ backgroundColor: '#2563EB' }}
+                className="rounded-xl px-3 py-1.5 text-sm font-semibold sm:order-2"
+                style={{ backgroundColor: 'var(--garden-blue)', color: 'var(--garden-cream)' }}
               >
                 View only
               </button>
               <button
                 type="button"
                 onClick={handleConfirmReset}
-                className="rounded px-3 py-1.5 text-sm font-medium text-white sm:order-3"
-                style={{ backgroundColor: '#3DBA6F' }}
+                className="rounded-xl px-3 py-1.5 text-sm font-semibold sm:order-3"
+                style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
               >
                 Reset from here
               </button>
@@ -1229,28 +1426,34 @@ export default function ProjectPage() {
 
       {deleteModalOpen && (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/60"
+          className="fixed inset-0 z-40 flex items-center justify-center"
+          style={{ backgroundColor: 'var(--garden-overlay)' }}
           onClick={() => setDeleteModalOpen(false)}
         >
           <div
-            className="z-50 w-full max-w-md rounded-xl p-6 shadow-xl"
-            style={{ backgroundColor: '#132419' }}
+            className="z-50 w-full max-w-md rounded-2xl border-2 p-6 shadow-xl"
+            style={{ backgroundColor: 'var(--garden-card)', borderColor: 'var(--garden-border-strong)' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="text-lg font-semibold text-white mb-2">Reset Video</h2>
-            <p className="text-white/70 text-sm mb-4">Type the project title to confirm deletion.</p>
+            <h2 className="text-lg font-semibold mb-2" style={{ color: 'var(--garden-text)' }}>
+              Reset Video
+            </h2>
+            <p className="text-sm mb-4" style={{ color: 'var(--garden-text-soft)' }}>
+              Type the project title to confirm deletion.
+            </p>
             <input
               type="text"
               value={deleteConfirmTitle}
               onChange={(e) => setDeleteConfirmTitle(e.target.value)}
               placeholder={project.title}
-              className="w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-white placeholder:text-white/40 mb-4"
+              className="garden-input-field mb-4 w-full rounded-xl px-3 py-2"
             />
             <div className="flex gap-2 justify-end">
               <button
                 type="button"
                 onClick={() => setDeleteModalOpen(false)}
-                className="rounded px-3 py-1.5 text-sm text-white/80 hover:text-white"
+                className="rounded-xl border-2 px-3 py-1.5 text-sm"
+                style={{ borderColor: 'var(--garden-border)', color: 'var(--garden-text-soft)' }}
               >
                 Cancel
               </button>
@@ -1258,8 +1461,12 @@ export default function ProjectPage() {
                 type="button"
                 onClick={handleDeleteConfirm}
                 disabled={deleteConfirmTitle !== project.title}
-                className="rounded px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ backgroundColor: deleteConfirmTitle === project.title ? '#EF4444' : '#6B7280' }}
+                className="rounded-xl px-3 py-1.5 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{
+                  backgroundColor:
+                    deleteConfirmTitle === project.title ? 'var(--garden-danger)' : 'var(--garden-step-muted)',
+                  color: 'var(--garden-cream)',
+                }}
               >
                 Delete
               </button>
