@@ -1304,6 +1304,8 @@ export default function EditorPage() {
                 };
                 const imgPath = seg.image.startsWith('images/') ? seg.image : `images/${seg.image}`;
                 const isUnmatched = seg.matched === false;
+                /** Only the selected clip gets active trim handles (avoids grabbing a neighbor's edge). */
+                const canTrimEdges = selectedSegmentId === seg.segment_id;
                 const segBarStyle = {
                   left,
                   width,
@@ -1463,9 +1465,15 @@ export default function EditorPage() {
                     style={segBarStyle}
                   >
                     <div
-                      className="absolute left-0 top-0 h-full w-2 cursor-ew-resize hover:opacity-100"
-                      style={{ backgroundColor: '#3DBA6F', opacity: 0.4 }}
-                      onMouseDown={onLeftMouseDown}
+                      className={`absolute left-0 top-0 h-full cursor-ew-resize hover:opacity-100 ${canTrimEdges ? 'w-3' : 'w-2'}`}
+                      style={{
+                        backgroundColor: '#3DBA6F',
+                        opacity: canTrimEdges ? 0.5 : 0,
+                        pointerEvents: canTrimEdges ? 'auto' : 'none',
+                        zIndex: canTrimEdges ? 25 : 0,
+                      }}
+                      onMouseDown={canTrimEdges ? onLeftMouseDown : undefined}
+                      aria-hidden
                     />
                     <div className="flex-1 flex items-center gap-2 pl-3 pr-3 min-w-0">
                       <img
@@ -1490,9 +1498,15 @@ export default function EditorPage() {
                       )}
                     </div>
                     <div
-                      className="absolute right-0 top-0 h-full w-2 cursor-ew-resize hover:opacity-100"
-                      style={{ backgroundColor: '#3DBA6F', opacity: 0.4 }}
-                      onMouseDown={onRightMouseDown}
+                      className={`absolute right-0 top-0 h-full cursor-ew-resize hover:opacity-100 ${canTrimEdges ? 'w-3' : 'w-2'}`}
+                      style={{
+                        backgroundColor: '#3DBA6F',
+                        opacity: canTrimEdges ? 0.5 : 0,
+                        pointerEvents: canTrimEdges ? 'auto' : 'none',
+                        zIndex: canTrimEdges ? 25 : 0,
+                      }}
+                      onMouseDown={canTrimEdges ? onRightMouseDown : undefined}
+                      aria-hidden
                     />
                   </div>
                   );
