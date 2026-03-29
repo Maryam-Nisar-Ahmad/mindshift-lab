@@ -1201,18 +1201,14 @@ export default function EditorPage() {
                       saveToHistory();
                       didSaveResizeHistory = true;
                     }
+                    /** Trim: snap only to playhead and timeline ends — not neighbor clips (avoids forced gaps). */
                     const snapThreshold = totalDuration * 0.01;
                     let nextSegs: Segment[] | null = null;
                     setSegments((prev) => {
                       const self = prev.find((s) => s.segment_id === dragRef.current!.segmentId);
                       if (!self) return prev;
                       let newStart = Math.max(0, Math.min(self.end - 0.5, dragRef.current!.startStart + delta));
-                      const snapPoints = [
-                        currentTimeRef.current,
-                        0,
-                        totalDuration,
-                        ...prev.filter((s) => s.segment_id !== self.segment_id).flatMap((s) => [s.start, s.end]),
-                      ];
+                      const snapPoints = [currentTimeRef.current, 0, totalDuration];
                       newStart = snapTimeToNearest(newStart, snapPoints, snapThreshold);
                       newStart = Math.max(0, Math.min(self.end - 0.5, newStart));
                       nextSegs = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, start: newStart } : s));
@@ -1224,22 +1220,6 @@ export default function EditorPage() {
                     window.removeEventListener('mousemove', onMove);
                     window.removeEventListener('mouseup', onUp);
                     dragRef.current = null;
-                    const snapThreshold = totalDuration * 0.01;
-                    setSegments((prev) => {
-                      const self = prev.find((s) => s.segment_id === seg.segment_id);
-                      if (!self) return prev;
-                      const snapPoints = [
-                        0,
-                        totalDuration,
-                        ...prev.filter((s) => s.segment_id !== self.segment_id).flatMap((s) => [s.start, s.end]),
-                      ];
-                      let newStart = snapTimeToNearest(self.start, snapPoints, snapThreshold);
-                      newStart = Math.max(0, Math.min(self.end - 0.5, newStart));
-                      if (Math.abs(newStart - self.start) < 1e-5) return prev;
-                      const next = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, start: newStart } : s));
-                      updateTotalDuration(next);
-                      return next;
-                    });
                     autoSave();
                   };
                   window.addEventListener('mousemove', onMove);
@@ -1258,18 +1238,14 @@ export default function EditorPage() {
                       saveToHistory();
                       didSaveResizeHistory = true;
                     }
+                    /** Trim: snap only to playhead and timeline ends — not neighbor clips. */
                     const snapThreshold = totalDuration * 0.01;
                     let nextSegs: Segment[] | null = null;
                     setSegments((prev) => {
                       const self = prev.find((s) => s.segment_id === dragRef.current!.segmentId);
                       if (!self) return prev;
                       let newEnd = Math.max(self.start + 0.5, Math.min(totalDuration, dragRef.current!.startEnd + delta));
-                      const snapPoints = [
-                        currentTimeRef.current,
-                        0,
-                        totalDuration,
-                        ...prev.filter((s) => s.segment_id !== self.segment_id).flatMap((s) => [s.start, s.end]),
-                      ];
+                      const snapPoints = [currentTimeRef.current, 0, totalDuration];
                       newEnd = snapTimeToNearest(newEnd, snapPoints, snapThreshold);
                       newEnd = Math.max(self.start + 0.5, Math.min(totalDuration, newEnd));
                       nextSegs = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, end: newEnd } : s));
@@ -1281,22 +1257,6 @@ export default function EditorPage() {
                     window.removeEventListener('mousemove', onMove);
                     window.removeEventListener('mouseup', onUp);
                     dragRef.current = null;
-                    const snapThreshold = totalDuration * 0.01;
-                    setSegments((prev) => {
-                      const self = prev.find((s) => s.segment_id === seg.segment_id);
-                      if (!self) return prev;
-                      const snapPoints = [
-                        0,
-                        totalDuration,
-                        ...prev.filter((s) => s.segment_id !== self.segment_id).flatMap((s) => [s.start, s.end]),
-                      ];
-                      let newEnd = snapTimeToNearest(self.end, snapPoints, snapThreshold);
-                      newEnd = Math.max(self.start + 0.5, Math.min(totalDuration, newEnd));
-                      if (Math.abs(newEnd - self.end) < 1e-5) return prev;
-                      const next = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, end: newEnd } : s));
-                      updateTotalDuration(next);
-                      return next;
-                    });
                     autoSave();
                   };
                   window.addEventListener('mousemove', onMove);
