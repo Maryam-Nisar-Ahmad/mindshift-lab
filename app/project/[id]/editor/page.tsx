@@ -60,6 +60,16 @@ function snapTimeToNearest(value: number, points: number[], threshold: number): 
   return best;
 }
 
+/**
+ * How close (seconds) a trim/drag must be to a snap point before it sticks.
+ * Tighter than a flat % of the whole timeline (old 1% felt huge on long videos).
+ */
+function timelineSnapThresholdSec(totalDuration: number): number {
+  if (!Number.isFinite(totalDuration) || totalDuration <= 0) return 0.04;
+  const fromFraction = totalDuration * 0.0018;
+  return Math.min(Math.max(fromFraction, 0.022), 0.065);
+}
+
 const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
   font_size: 48,
   position: 'bottom',
@@ -1205,7 +1215,7 @@ export default function EditorPage() {
                      * Trim while dragging: snap to neighbors + playhead + timeline ends.
                      * Mouseup does not re-snap — so you can release in a gap without a jump.
                      */
-                    const snapThreshold = totalDuration * 0.01;
+                    const snapThreshold = timelineSnapThresholdSec(totalDuration);
                     let nextSegs: Segment[] | null = null;
                     setSegments((prev) => {
                       const self = prev.find((s) => s.segment_id === dragRef.current!.segmentId);
@@ -1250,7 +1260,7 @@ export default function EditorPage() {
                      * Trim while dragging: snap to neighbors + playhead + timeline ends.
                      * Mouseup does not re-snap — so you can release in a gap without a jump.
                      */
-                    const snapThreshold = totalDuration * 0.01;
+                    const snapThreshold = timelineSnapThresholdSec(totalDuration);
                     let nextSegs: Segment[] | null = null;
                     setSegments((prev) => {
                       const self = prev.find((s) => s.segment_id === dragRef.current!.segmentId);
@@ -1374,10 +1384,7 @@ export default function EditorPage() {
                         let newStart = Math.max(0, Math.min(totalDuration - duration, startStart + delta));
                         let newEnd = newStart + duration;
 
-                        /*
-                         * Snap to neighboring clip edges (1% threshold)
-                         */
-                        const snapThreshold = totalDuration * 0.01;
+                        const snapThreshold = timelineSnapThresholdSec(totalDuration);
                         let snapped = false;
 
                         let snappedLeft: number | null = null;
