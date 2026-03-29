@@ -1,3 +1,5 @@
+import { encodeProjectIdForPath as pid } from '@/lib/projectId';
+
 export const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export async function listProjects() {
@@ -19,14 +21,14 @@ export async function createProject(title: string) {
 }
 
 export async function getProject(id: string) {
-  const res = await fetch(`${API}/api/projects/${id}`);
+  const res = await fetch(`${API}/api/projects/${pid(id)}`);
   const data = await res.json();
   if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
   return data;
 }
 
 export async function deleteProject(id: string, confirm_title: string) {
-  const res = await fetch(`${API}/api/projects/${id}`, {
+  const res = await fetch(`${API}/api/projects/${pid(id)}`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ confirm_title }),
@@ -37,7 +39,7 @@ export async function deleteProject(id: string, confirm_title: string) {
 }
 
 export async function updateTitle(id: string, title: string) {
-  const res = await fetch(`${API}/api/projects/${id}/title`, {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/title`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
@@ -48,7 +50,7 @@ export async function updateTitle(id: string, title: string) {
 }
 
 export async function resetStep(id: string, step: number) {
-  const res = await fetch(`${API}/api/projects/${id}/reset-step`, {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/reset-step`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ step }),
@@ -61,7 +63,7 @@ export async function resetStep(id: string, step: number) {
 export async function stepComplete(id: string, step: number, nextStep?: number): Promise<void> {
   const body: { step: number; next_step?: number } = { step };
   if (nextStep !== undefined) body.next_step = nextStep;
-  await fetch(`${API}/api/projects/${id}/step-complete`, {
+  await fetch(`${API}/api/projects/${pid(id)}/step-complete`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -76,7 +78,7 @@ export async function getPromptTemplate(name: string) {
 }
 
 export async function saveScript(id: string, script: string, is_cleaned: boolean) {
-  const res = await fetch(`${API}/api/projects/${id}/script`, {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/script`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ script, is_cleaned }),
@@ -86,19 +88,27 @@ export async function saveScript(id: string, script: string, is_cleaned: boolean
   return data;
 }
 
-export async function cleanScript(id: string, script: string) {
-  const res = await fetch(`${API}/api/projects/${id}/clean-script`, {
+export async function cleanScript(_id: string, script: string) {
+  const base = API.replace(/\/$/, '');
+  // Path does not include project id — avoids "Failed to fetch" from malformed URLs; backend ignores id anyway.
+  const res = await fetch(`${base}/api/clean-script`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ script }),
+    signal: typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(300_000) : undefined,
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
+  let data: { detail?: string; cleaned_script?: string } = {};
+  try {
+    data = (await res.json()) as typeof data;
+  } catch {
+    throw new Error(res.ok ? 'Invalid response from server' : `Request failed (${res.status})`);
+  }
+  if (!res.ok) throw new Error(data.detail || 'Request failed');
   return data;
 }
 
 export async function generatePrompts(id: string) {
-  const res = await fetch(`${API}/api/projects/${id}/generate-prompts`, {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/generate-prompts`, {
     method: "POST",
   });
   const data = await res.json();
@@ -107,14 +117,14 @@ export async function generatePrompts(id: string) {
 }
 
 export async function getPrompts(id: string) {
-  const res = await fetch(`${API}/api/projects/${id}/prompts`);
+  const res = await fetch(`${API}/api/projects/${pid(id)}/prompts`);
   const data = await res.json();
   if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
   return data;
 }
 
 export async function regeneratePrompt(id: string, segId: string, segment_text: string) {
-  const res = await fetch(`${API}/api/projects/${id}/regenerate-prompt`, {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/regenerate-prompt/${encodeURIComponent(segId)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ segment_text }),
@@ -125,7 +135,7 @@ export async function regeneratePrompt(id: string, segId: string, segment_text: 
 }
 
 export async function checkImages(id: string) {
-  const res = await fetch(`${API}/api/projects/${id}/image-check`);
+  const res = await fetch(`${API}/api/projects/${pid(id)}/image-check`);
   const data = await res.json();
   if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
   return data;
@@ -134,7 +144,7 @@ export async function checkImages(id: string) {
 export async function uploadAudio(id: string, file: File) {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API}/api/projects/${id}/audio`, {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/audio`, {
     method: "POST",
     body: form,
   });
@@ -144,14 +154,14 @@ export async function uploadAudio(id: string, file: File) {
 }
 
 export async function getAudioStatus(id: string) {
-  const res = await fetch(`${API}/api/projects/${id}/audio-status`);
+  const res = await fetch(`${API}/api/projects/${pid(id)}/audio-status`);
   const data = await res.json();
   if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
   return data;
 }
 
 export async function assembleSegments(id: string) {
-  const res = await fetch(`${API}/api/projects/${id}/assemble`, {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/assemble`, {
     method: "POST",
   });
   const data = await res.json();
@@ -160,14 +170,14 @@ export async function assembleSegments(id: string) {
 }
 
 export async function getSegments(id: string) {
-  const res = await fetch(`${API}/api/projects/${id}/segments`);
+  const res = await fetch(`${API}/api/projects/${pid(id)}/segments`);
   const data = await res.json();
   if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
   return data;
 }
 
 export async function generateSubtitles(id: string) {
-  const res = await fetch(`${API}/api/projects/${id}/generate-subtitles`, {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/generate-subtitles`, {
     method: "POST",
   });
   const data = await res.json();
@@ -176,7 +186,7 @@ export async function generateSubtitles(id: string) {
 }
 
 export async function saveEditorState(id: string, state: unknown) {
-  const res = await fetch(`${API}/api/projects/${id}/editor-state`, {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/editor-state`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(state),
@@ -187,14 +197,14 @@ export async function saveEditorState(id: string, state: unknown) {
 }
 
 export async function getEditorState(id: string) {
-  const res = await fetch(`${API}/api/projects/${id}/editor-state`);
+  const res = await fetch(`${API}/api/projects/${pid(id)}/editor-state`);
   const data = await res.json();
   if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
   return data;
 }
 
 export async function exportVideo(id: string, editorState: unknown) {
-  const res = await fetch(`${API}/api/projects/${id}/export`, {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/export`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ editor_state: editorState }),
@@ -212,17 +222,18 @@ export async function getJobStatus(jobId: string) {
 }
 
 export function fileUrl(id: string, path: string): string {
-  return API + "/api/projects/" + id + "/files/" + path;
+  const safePath = path.split("/").map((p) => encodeURIComponent(p)).join("/");
+  return `${API}/api/projects/${pid(id)}/files/${safePath}`;
 }
 
-export async function getSeoData(id: string): Promise<{ description: string; tags: string }> {
-  const res = await fetch(`${API}/api/projects/${encodeURIComponent(id)}/seo-data`);
-  if (!res.ok) return { description: '', tags: '' };
+export async function getSeoData(id: string): Promise<{ description: string; tags: string; cleaned_script?: string }> {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/seo-data`);
+  if (!res.ok) return { description: '', tags: '', cleaned_script: '' };
   return res.json();
 }
 
-export async function saveSeoData(id: string, data: { description: string; tags: string }): Promise<void> {
-  await fetch(`${API}/api/projects/${encodeURIComponent(id)}/seo-data`, {
+export async function saveSeoData(id: string, data: { description: string; tags: string; cleaned_script?: string }): Promise<void> {
+  await fetch(`${API}/api/projects/${pid(id)}/seo-data`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),

@@ -1,13 +1,15 @@
 'use client';
 
 import { useParams, useRouter } from 'next/navigation';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { getProject, resetStep, deleteProject, getPromptTemplate, updateTitle, stepComplete, cleanScript, saveScript, getPrompts, generatePrompts, getJobStatus, checkImages, regeneratePrompt, fileUrl, uploadAudio, getAudioStatus, assembleSegments, getSeoData, saveSeoData } from '@/lib/api';
+import { projectIdFromParams, encodeProjectIdForRoute } from '@/lib/projectId';
 import useToast from '@/hooks/useToast';
 import Toast from '@/components/Toast';
 import SceneBatchPage from '@/components/SceneBatchPage';
 
 type Project = { id: string; title: string; current_step?: number; mtime?: number };
+type ProjectWithReviewMeta = Project & { exportedVideoPath?: string; videoUrl?: string };
 
 const STEPS = [
   { num: 1, name: 'Channel Strategy' },
@@ -26,11 +28,14 @@ const STEPS = [
 export default function ProjectPage() {
   const params = useParams();
   const router = useRouter();
-  const id = typeof params.id === 'string' ? params.id : '';
+  const id = projectIdFromParams(params.id);
   const { toasts, showToast, removeToast } = useToast();
 
   const [project, setProject] = useState<Project | null>(null);
+  const [projectError, setProjectError] = useState<string | null>(null);
   const [resetModal, setResetModal] = useState<{ open: true; step: number } | { open: false }>({ open: false });
+  /** When set, user is browsing an earlier step without changing saved progress on the server. */
+  const [viewingStep, setViewingStep] = useState<number | null>(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteConfirmTitle, setDeleteConfirmTitle] = useState('');
   const [step1Template, setStep1Template] = useState<string | null>(null);
@@ -51,43 +56,100 @@ export default function ProjectPage() {
   const [step5Status, setStep5Status] = useState<'idle' | 'transcribing' | 'correcting' | 'done' | 'error'>('idle');
   const [step5Result, setStep5Result] = useState<{ duration_sec?: number; word_count?: number; words_corrected?: number } | null>(null);
   const [step5Error, setStep5Error] = useState<string | null>(null);
-  const [step7Template, setStep7Template] = useState<string | null>(null);
-  const [step7ScriptText, setStep7ScriptText] = useState<string>('');
   const [step7Combined, setStep7Combined] = useState<string>('');
   const [step7OutputText, setStep7OutputText] = useState('');
-  const [cleanedScript, setCleanedScript] = useState<string>('');
+  const [step8CleanedScript, setStep8CleanedScript] = useState<string>('');
   const [step7Copied, setStep7Copied] = useState(false);
   const [thumbnailReviewPrompt, setThumbnailReviewPrompt] = useState('');
   const [step8Description, setStep8Description] = useState('');
   const [step8Tags, setStep8Tags] = useState('');
   const [everActiveSteps, setEverActiveSteps] = useState<Record<string, boolean>>({});
   const [manuallyExpandedSteps, setManuallyExpandedSteps] = useState<Record<string, boolean>>({});
+  const promptDoneSoundPlayedRef = useRef<string | null>(null);
+
+  const parseStep7Deliverables = useCallback((text: string) => {
+    const src = (text || '').replace(/\r\n/g, '\n');
+    const extractSection = (labels: string[], nextLabels: string[]) => {
+      const labelPattern = labels.join('|');
+      const nextPattern = nextLabels.join('|');
+      const rx = new RegExp(
+        `(?:^|\\n)\\s*(?:\\d+[\\).:-]?\\s*)?(?:${labelPattern})\\s*[:\\-]?\\s*([\\s\\S]*?)(?=\\n\\s*(?:\\d+[\\).:-]?\\s*)?(?:${nextPattern})\\s*[:\\-]?|$)`,
+        'i'
+      );
+      const match = src.match(rx);
+      return (match?.[1] || '').trim();
+    };
+
+    const videoTitle = extractSection(
+      ['video\\s*title', 'title'],
+      ['seo\\s*description', 'description', 'tags?', 'cleaned\\s*script']
+    );
+    const description = extractSection(
+      ['seo\\s*description', 'description'],
+      ['tags?', 'cleaned\\s*script']
+    );
+    const tagsRaw = extractSection(
+      ['tags?'],
+      ['cleaned\\s*script']
+    );
+    const cleanedScript = extractSection(
+      ['cleaned\\s*script', 'script'],
+      ['$a']
+    );
+    const tags = tagsRaw
+      .split('\n')
+      .map((x) => x.replace(/^[-*•]\s*/, '').trim())
+      .filter(Boolean)
+      .join(', ');
+
+    return { videoTitle, description, tags, cleanedScript };
+  }, []);
 
   const fetchProject = useCallback(() => {
-    if (!id) return;
+    if (!id) {
+      setProject(null);
+      setProjectError('Invalid project link.');
+      return;
+    }
+    setProjectError(null);
     getProject(id)
       .then((data) => {
         setProject(data);
-        console.log('project data:', data, 'current_step:', data?.current_step, 'type:', typeof data?.current_step);
+        setProjectError(null);
       })
       .catch((err) => {
         setProject(null);
-        showToast(err instanceof Error ? err.message : 'Request failed', 'error');
+        const msg = err instanceof Error ? err.message : 'Request failed';
+        setProjectError(msg);
+        showToast(msg, 'error');
       });
   }, [id, showToast]);
 
   useEffect(() => {
-    fetchProject();
+    queueMicrotask(() => {
+      fetchProject();
+    });
   }, [fetchProject]);
 
   const currentStep = typeof project?.current_step === 'number' ? project.current_step : Number(project?.current_step ?? 0);
+  const displayStep = viewingStep ?? currentStep;
   useEffect(() => {
     const key = String(currentStep);
     if (!Number.isFinite(currentStep)) return;
-    setEverActiveSteps((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+    queueMicrotask(() => {
+      setEverActiveSteps((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+    });
   }, [currentStep]);
   useEffect(() => {
-    if (currentStep === 1) {
+    if (viewingStep == null) return;
+    const key = String(viewingStep);
+    if (!Number.isFinite(viewingStep)) return;
+    queueMicrotask(() => {
+      setEverActiveSteps((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+    });
+  }, [viewingStep]);
+  useEffect(() => {
+    if (displayStep === 1) {
       getPromptTemplate('1_channel_strategy')
         .then((r: { content?: string }) => setStep1Template(r?.content ?? null))
         .catch((err) => {
@@ -95,9 +157,9 @@ export default function ProjectPage() {
           showToast(err instanceof Error ? err.message : 'Request failed', 'error');
         });
     }
-  }, [currentStep, showToast]);
+  }, [displayStep, showToast]);
   useEffect(() => {
-    if (currentStep === 2) {
+    if (displayStep === 2) {
       getPromptTemplate('2_script_generation')
         .then((r: { content?: string }) => setStep2Template(r?.content ?? null))
         .catch((err) => {
@@ -105,9 +167,9 @@ export default function ProjectPage() {
           showToast(err instanceof Error ? err.message : 'Request failed', 'error');
         });
     }
-  }, [currentStep, showToast]);
+  }, [displayStep, showToast]);
   useEffect(() => {
-    if (id && currentStep === 3) {
+    if (id && displayStep >= 3) {
       getPrompts(id)
         .then((p: { segment_id: number; segment_text: string; mj_line: string }[]) => setStep3Prompts(Array.isArray(p) ? p : null))
         .catch((err) => {
@@ -115,9 +177,40 @@ export default function ProjectPage() {
           showToast(err instanceof Error ? err.message : 'Request failed', 'error');
         });
     }
-  }, [id, currentStep, showToast]);
+  }, [id, displayStep, showToast]);
+  const playPromptDoneSound = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.7);
+    gain.connect(ctx.destination);
+
+    const osc1 = ctx.createOscillator();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(880, now);
+    osc1.connect(gain);
+    osc1.start(now);
+    osc1.stop(now + 0.22);
+
+    const osc2 = ctx.createOscillator();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(1320, now + 0.24);
+    osc2.connect(gain);
+    osc2.start(now + 0.24);
+    osc2.stop(now + 0.56);
+
+    void ctx.resume().catch(() => {});
+    setTimeout(() => {
+      void ctx.close().catch(() => {});
+    }, 900);
+  }, []);
   useEffect(() => {
-    if (id && currentStep === 4) {
+    if (id && displayStep === 4) {
       Promise.all([
         getPromptTemplate('4_thumbnail').then((r: { content?: string }) => r?.content ?? ''),
         fetch(fileUrl(id, 'script.txt'))
@@ -133,31 +226,41 @@ export default function ProjectPage() {
           showToast(err instanceof Error ? err.message : 'Request failed', 'error');
         });
     }
-  }, [id, currentStep, project?.title, showToast]);
+  }, [id, displayStep, project?.title, showToast]);
+  useEffect(() => {
+    if (!id || viewingStep !== 2) return;
+    fetch(fileUrl(id, 'script.txt'))
+      .then((r) => r.text())
+      .then((text) => setStep2Script(text))
+      .catch(() => {});
+  }, [id, viewingStep]);
   useEffect(() => {
     if (!id) return;
     const saved = localStorage.getItem(`step4CustomInput_${id}`);
-    if (saved) setStep4CustomInput(saved);
+    if (saved) {
+      queueMicrotask(() => setStep4CustomInput(saved));
+    }
   }, [id]);
   useEffect(() => {
-    if (id && currentStep === 4.1) {
+    if (id && displayStep === 4.1) {
       getPromptTemplate('8_thumbnail_review_prompt')
         .then((r: { content?: string }) => setThumbnailReviewPrompt(r?.content ?? ''))
         .catch(() => {});
     }
-  }, [id, currentStep]);
+  }, [id, displayStep]);
   useEffect(() => {
-    if (id && currentStep === 8) {
+    if (id && displayStep === 8) {
       getSeoData(id)
         .then((data) => {
           setStep8Description(data.description ?? '');
           setStep8Tags(data.tags ?? '');
+          setStep8CleanedScript(data.cleaned_script ?? '');
         })
         .catch(() => {});
     }
-  }, [id, currentStep]);
+  }, [id, displayStep]);
   useEffect(() => {
-    if (id && currentStep === 4.5) {
+    if (id && displayStep === 4.5) {
       fetch(fileUrl(id, 'script.txt'))
         .then((r) => r.text())
         .then(setStep4_5Script)
@@ -166,23 +269,42 @@ export default function ProjectPage() {
           showToast('Failed to load script', 'error');
         });
     }
-  }, [id, currentStep, showToast]);
+  }, [id, displayStep, showToast]);
   useEffect(() => {
-    if (id && currentStep === 7) {
+    if (id && displayStep === 7) {
       Promise.all([
         getPromptTemplate('5_seo').then((r: { content?: string }) => r?.content ?? ''),
         fetch(fileUrl(id, 'script.txt')).then((r) => r.text()).catch(() => ''),
       ])
         .then(([tpl, script]) => {
-          setStep7Template(tpl);
-          setStep7ScriptText(script);
           const combined = (tpl + (project?.title ? '\n\n' + project.title : '') + (script ? '\n\n' + script : '')).trim();
           setStep7Combined(combined);
           setStep7OutputText('');
         })
         .catch((err) => showToast(err instanceof Error ? err.message : 'Request failed', 'error'));
     }
-  }, [id, currentStep, project?.title, showToast]);
+  }, [id, displayStep, project?.title, showToast]);
+  useEffect(() => {
+    if (!id || displayStep !== 5) return;
+    getAudioStatus(id)
+      .then((s: { status?: string; duration_sec?: number; word_count?: number; words_corrected?: number; error?: string }) => {
+        if (s?.status === 'transcribing') setStep5Status('transcribing');
+        else if (s?.status === 'correcting') setStep5Status('correcting');
+        else if (s?.status === 'done') {
+          setStep5Status('done');
+          setStep5Result({ duration_sec: s.duration_sec, word_count: s.word_count, words_corrected: s.words_corrected });
+          setStep5Error(null);
+        } else if (s?.status === 'error') {
+          setStep5Status('error');
+          setStep5Error(s?.error ?? 'Processing failed');
+        } else {
+          setStep5Status('idle');
+          setStep5Result(null);
+          setStep5Error(null);
+        }
+      })
+      .catch(() => {});
+  }, [id, displayStep]);
   useEffect(() => {
     if (!step3JobId) return;
     const interval = setInterval(() => {
@@ -191,6 +313,10 @@ export default function ProjectPage() {
           if (s?.status === 'splitting') setStep3JobStatusText('Analyzing script...');
           else if (s?.status === 'generating') setStep3JobStatusText('Generating prompts...');
           if (s?.status === 'done') {
+            if (promptDoneSoundPlayedRef.current !== step3JobId) {
+              playPromptDoneSound();
+              promptDoneSoundPlayedRef.current = step3JobId;
+            }
             setStep3JobId(null);
             if (id) getPrompts(id).then((p: { segment_id: number; segment_text: string; mj_line: string }[]) => setStep3Prompts(Array.isArray(p) ? p : null)).catch(() => {});
           }
@@ -198,7 +324,7 @@ export default function ProjectPage() {
         .catch(() => {});
     }, 2000);
     return () => clearInterval(interval);
-  }, [step3JobId, id]);
+  }, [step3JobId, id, playPromptDoneSound]);
   useEffect(() => {
     if (!id || (step5Status !== 'transcribing' && step5Status !== 'correcting')) return;
     const interval = setInterval(() => {
@@ -256,12 +382,32 @@ export default function ProjectPage() {
     setResetModal({ open: true, step });
   }
 
+  function stepPanelElementId(step: number) {
+    return step === 7 ? 'step-7' : `step-panel-${String(step).replace(/\./g, '-')}`;
+  }
+
+  function handleViewStepOnly() {
+    if (!resetModal.open || !('step' in resetModal)) return;
+    const step = resetModal.step;
+    if (step === 1 && project?.title != null) {
+      setStep1Title(project.title);
+    }
+    setViewingStep(step);
+    const key = String(step);
+    setManuallyExpandedSteps((prev) => ({ ...prev, [key]: true }));
+    setResetModal({ open: false });
+    queueMicrotask(() => {
+      document.getElementById(stepPanelElementId(step))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
   function handleConfirmReset() {
     if (!resetModal.open || !id) return;
     const step = 'step' in resetModal ? resetModal.step : 0;
     resetStep(id, step)
       .then(() => {
         setResetModal({ open: false });
+        setViewingStep(null);
         fetchProject();
         showToast('Step reset', 'success');
       })
@@ -294,7 +440,22 @@ export default function ProjectPage() {
           <span style={{ color: '#3DBA6F' }}>MindShift Lab</span>
         </header>
         <div className="min-h-screen overflow-y-auto px-6 py-8" style={{ backgroundColor: '#0D1A12' }}>
-          <p className="text-white/70">Loading…</p>
+          {projectError ? (
+            <div className="max-w-md space-y-4">
+              <p className="text-red-400">{projectError}</p>
+              <p className="text-white/60 text-sm">Check that the backend is running and the project folder still exists under videos/.</p>
+              <button
+                type="button"
+                className="rounded px-3 py-1.5 text-sm text-white"
+                style={{ backgroundColor: '#3DBA6F' }}
+                onClick={handleBackClick}
+              >
+                Back to home
+              </button>
+            </div>
+          ) : (
+            <p className="text-white/70">Loading…</p>
+          )}
         </div>
         {toasts.length > 0 && (
           <div className="fixed top-4 right-4 z-50 flex flex-col gap-2">
@@ -316,6 +477,27 @@ export default function ProjectPage() {
         <span style={{ color: '#3DBA6F' }}>MindShift Lab</span>
       </header>
 
+      {viewingStep != null && Number.isFinite(currentStep) && (
+        <div
+          className="sticky top-14 z-10 mx-6 mt-2 flex flex-col gap-2 rounded-xl border border-amber-500/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+          style={{ backgroundColor: '#1a2e22' }}
+        >
+          <p className="text-sm text-white/90">
+            Viewing step <span className="font-semibold text-amber-200">{viewingStep}</span>
+            {' — '}
+            your saved progress remains step <span className="font-semibold text-[#3DBA6F]">{currentStep}</span>.
+          </p>
+          <button
+            type="button"
+            className="shrink-0 rounded-lg px-3 py-1.5 text-sm font-medium text-white"
+            style={{ backgroundColor: '#3DBA6F' }}
+            onClick={() => setViewingStep(null)}
+          >
+            Return to current step
+          </button>
+        </div>
+      )}
+
       {(project?.current_step ?? 0) > 8 && (
         <div className="sticky top-14 z-10 mx-6 mt-2 flex justify-between items-center rounded-xl p-4 text-white" style={{ backgroundColor: '#3DBA6F' }}>
           <span>Video Complete! Ready to download.</span>
@@ -328,15 +510,14 @@ export default function ProjectPage() {
 
         {STEPS.map(({ num, name }) => {
           const complete = currentStep > num;
-          const active = currentStep === num;
-          const pending = currentStep < num;
+          const active = viewingStep === num || (viewingStep == null && currentStep === num);
           const key = String(num);
           const expanded = active || (!!everActiveSteps[key] && !!manuallyExpandedSteps[key]);
 
           return (
             <div
               key={num}
-              id={num === 7 ? 'step-7' : undefined}
+              id={num === 7 ? 'step-7' : `step-panel-${String(num).replace(/\./g, '-')}`}
               className="rounded-xl p-5 mb-4"
               style={{
                 backgroundColor: '#132419',
@@ -348,7 +529,7 @@ export default function ProjectPage() {
                   <span
                     className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-medium text-white"
                     style={{
-                      backgroundColor: active || complete ? '#3DBA6F' : '#6B7280',
+                      backgroundColor: currentStep >= num || viewingStep === num ? '#3DBA6F' : '#6B7280',
                     }}
                   >
                     {num}
@@ -357,7 +538,7 @@ export default function ProjectPage() {
                     type="button"
                     className="font-bold text-white text-left hover:opacity-90"
                     onClick={() => {
-                      if (!active && !everActiveSteps[key]) return;
+                      if (!active && !complete && !everActiveSteps[key]) return;
                       setManuallyExpandedSteps((prev) => ({ ...prev, [key]: !prev[key] }));
                     }}
                   >
@@ -365,9 +546,10 @@ export default function ProjectPage() {
                   </button>
                 </div>
                 <span className="text-sm text-white/70">
-                  {active && 'Active'}
-                  {complete && 'Completed'}
-                  {pending && 'Pending'}
+                  {viewingStep === num && 'Viewing'}
+                  {viewingStep !== num && currentStep === num && (viewingStep != null ? 'Your progress' : 'Active')}
+                  {viewingStep !== num && currentStep > num && 'Completed'}
+                  {viewingStep !== num && currentStep < num && 'Pending'}
                 </span>
               </div>
 
@@ -616,7 +798,6 @@ export default function ProjectPage() {
                         className="mt-2 rounded px-2 py-1 text-xs"
                         style={{ backgroundColor: '#132419', color: '#F0F4F0' }}
                         onClick={() => {
-                          console.log('COPY DEBUG — step4CustomInput:', step4CustomInput, '| localStorage value:', localStorage.getItem(`step4CustomInput_${id}`));
                           const extra = step4CustomInput.trim();
                           const text = thumbnailReviewPrompt + (extra ? '\n\n' + extra : '');
                           navigator.clipboard.writeText(text);
@@ -730,7 +911,7 @@ export default function ProjectPage() {
                               style={{ backgroundColor: '#3DBA6F' }}
                               onClick={() => {
                                 assembleSegments(id)
-                                  .then(() => router.push('/project/' + id + '/editor'))
+                                  .then(() => router.push('/project/' + encodeProjectIdForRoute(id) + '/editor'))
                                   .catch((err) => showToast(err instanceof Error ? err.message : 'Assembly failed', 'error'));
                               }}
                             >
@@ -778,8 +959,29 @@ export default function ProjectPage() {
                           className="rounded px-3 py-1.5 text-sm font-medium border border-amber-500 text-amber-500 hover:bg-amber-500/10"
                           onClick={() => {
                             if (!id || !step7OutputText.trim()) return;
-                            cleanScript(id, step7OutputText)
-                              .then((r: { cleaned_script?: string }) => { setStep7OutputText(r?.cleaned_script ?? step7OutputText); setCleanedScript(r?.cleaned_script ?? ''); showToast('Script cleaned successfully with AI', 'success'); })
+                            const cleanInstruction = [
+                              'Clean and normalize this Step-7 AI response.',
+                              'Return EXACTLY these four sections in order:',
+                              '1. Video Title:',
+                              '2. SEO Description:',
+                              '3. Tags:',
+                              '4. Cleaned Script:',
+                              '',
+                              'Keep meaning unchanged, fix grammar/formatting, and keep tags concise/comma-separated.',
+                              '',
+                              'INPUT:',
+                              step7OutputText,
+                            ].join('\n');
+                            cleanScript(id, cleanInstruction)
+                              .then((r: { cleaned_script?: string }) => {
+                                const cleaned = r?.cleaned_script ?? step7OutputText;
+                                const parsed = parseStep7Deliverables(cleaned);
+                                setStep7OutputText(cleaned);
+                                if (parsed.description) setStep8Description(parsed.description);
+                                if (parsed.tags) setStep8Tags(parsed.tags);
+                                setStep8CleanedScript(parsed.cleanedScript || cleaned);
+                                showToast('Step 7 deliverables cleaned and mapped', 'success');
+                              })
                               .catch((err) => showToast(err instanceof Error ? err.message : 'Clean failed', 'error'));
                           }}
                         >
@@ -791,7 +993,15 @@ export default function ProjectPage() {
                           style={{ backgroundColor: '#3DBA6F' }}
                           onClick={() => {
                             if (!id) return;
-                            saveScript(id, step7OutputText, true)
+                            const parsed = parseStep7Deliverables(step7OutputText);
+                            const nextDescription = parsed.description || step8Description;
+                            const nextTags = parsed.tags || step8Tags;
+                            const nextCleanedScript = parsed.cleanedScript || step8CleanedScript || step7OutputText;
+                            setStep8Description(nextDescription);
+                            setStep8Tags(nextTags);
+                            setStep8CleanedScript(nextCleanedScript);
+                            saveSeoData(id, { description: nextDescription, tags: nextTags, cleaned_script: nextCleanedScript })
+                              .then(() => saveScript(id, step7OutputText, true))
                               .then(() => stepComplete(id, 7))
                               .then(() => { fetchProject(); showToast('Saved', 'success'); })
                               .catch((err) => showToast(err instanceof Error ? err.message : 'Failed to save', 'error'));
@@ -839,7 +1049,7 @@ export default function ProjectPage() {
                         <div>
                           <label className="block text-sm text-zinc-400 mb-1">Cleaned Script (from AI)</label>
                           <pre className="bg-zinc-900 p-4 rounded text-white whitespace-pre-wrap max-h-60 overflow-auto">
-                            {cleanedScript || 'Run "Clean with AI" in Step 7 first'}
+                            {step8CleanedScript || 'Run "Clean with AI" in Step 7 first'}
                           </pre>
                         </div>
 
@@ -847,7 +1057,7 @@ export default function ProjectPage() {
                         <div className="pt-4 border-t border-zinc-700">
                           <label className="block text-sm text-zinc-400 mb-1">Exported Video File Path</label>
                           <div className="bg-zinc-900 p-4 rounded text-emerald-400 font-mono text-sm break-all">
-                            {(project as any)?.exportedVideoPath || (project as any)?.videoUrl || 'Video not exported yet. Click "Export Video" in previous step.'}
+                            {(project as ProjectWithReviewMeta)?.exportedVideoPath || (project as ProjectWithReviewMeta)?.videoUrl || 'Video not exported yet. Click "Export Video" in previous step.'}
                           </div>
                         </div>
 
@@ -855,7 +1065,7 @@ export default function ProjectPage() {
                           type="button"
                           onClick={() => {
                             if (!id) return;
-                            saveSeoData(id, { description: step8Description, tags: step8Tags })
+                            saveSeoData(id, { description: step8Description, tags: step8Tags, cleaned_script: step8CleanedScript })
                               .then(() => stepComplete(id, 8))
                               .then(() => {
                                 fetchProject();
@@ -910,22 +1120,35 @@ export default function ProjectPage() {
             style={{ backgroundColor: '#132419' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <p className="text-white mb-4">Go back to this step and reset progress after it?</p>
-            <div className="flex gap-2 justify-end">
+            <p className="text-white mb-1 font-medium">Open this step again?</p>
+            <p className="text-white/65 text-sm mb-4 leading-relaxed">
+              <span className="text-white/85">View only</span> — read prompts and copy content; your saved step and files stay as they are.
+              <br />
+              <span className="text-white/85">Reset from here</span> — delete work from this step onward so you can redo it (same as before).
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
               <button
                 type="button"
                 onClick={() => setResetModal({ open: false })}
-                className="rounded px-3 py-1.5 text-sm text-white/80 hover:text-white"
+                className="rounded px-3 py-1.5 text-sm text-white/80 hover:text-white sm:order-1"
               >
                 Cancel
               </button>
               <button
                 type="button"
+                onClick={handleViewStepOnly}
+                className="rounded px-3 py-1.5 text-sm font-medium text-white sm:order-2"
+                style={{ backgroundColor: '#2563EB' }}
+              >
+                View only
+              </button>
+              <button
+                type="button"
                 onClick={handleConfirmReset}
-                className="rounded px-3 py-1.5 text-sm font-medium text-white"
+                className="rounded px-3 py-1.5 text-sm font-medium text-white sm:order-3"
                 style={{ backgroundColor: '#3DBA6F' }}
               >
-                Confirm
+                Reset from here
               </button>
             </div>
           </div>

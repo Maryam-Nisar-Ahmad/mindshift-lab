@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import { listProjects, createProject } from '@/lib/api';
+import { encodeProjectIdForRoute } from '@/lib/projectId';
 import useToast from '@/hooks/useToast';
 import Toast from '@/components/Toast';
 
@@ -34,7 +35,7 @@ export default function Page() {
       const result = await createProject(t);
       setModalOpen(false);
       setTitle('');
-      router.push('/project/' + result.id);
+      router.push('/project/' + encodeProjectIdForRoute(result.id));
       showToast('Project created', 'success');
     } catch {
       showToast('Failed to create project', 'error');
@@ -136,13 +137,13 @@ export default function Page() {
                 tabIndex={0}
                 onClick={() => {
                   setDrawerOpen(false);
-                  router.push('/project/' + project.id);
+                  router.push('/project/' + encodeProjectIdForRoute(project.id));
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
                     setDrawerOpen(false);
-                    router.push('/project/' + project.id);
+                    router.push('/project/' + encodeProjectIdForRoute(project.id));
                   }
                 }}
                 className="mb-2 cursor-pointer rounded p-4 transition-opacity hover:opacity-90"

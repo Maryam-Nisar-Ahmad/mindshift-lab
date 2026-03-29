@@ -119,6 +119,7 @@ class CleanScriptBody(BaseModel):
 class SeoDataBody(BaseModel):
     description: str
     tags: str
+    cleaned_script: str = ""
 
 
 class RegeneratePromptBody(BaseModel):
@@ -297,6 +298,13 @@ def save_script(id: str, body: ScriptBody):
     return {"ok": True}
 
 
+@app.post("/api/clean-script")
+async def clean_script_global(body: CleanScriptBody):
+    """Body-only cleaning (no project id in URL) — avoids fetch failures from encoded path segments."""
+    cleaned_script = await clean_script(body.script)
+    return {"cleaned_script": cleaned_script}
+
+
 @app.post("/api/projects/{id}/clean-script")
 async def clean_script_route(id: str, body: CleanScriptBody):
     cleaned_script = await clean_script(body.script)
@@ -313,7 +321,9 @@ def _run_generate_prompts(project_id: str, script_text: str, job_id: str):
         with open(project_dir / "mj_prompts.json", "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
         meta = read_meta(project_id)
-        meta["current_step"] = max(meta.get("current_step", 0), 4)
+        # Keep user at image-check stage after prompt generation so progress
+        # can be resumed without forcing a fresh prompt run.
+        meta["current_step"] = max(meta.get("current_step", 0), 3.5)
         write_meta(project_id, meta)
     finally:
         loop.close()
@@ -367,9 +377,12 @@ def get_seo_data(project_id: str):
     project_dir = get_project_dir(project_id)
     path = project_dir / "seo_data.json"
     if not path.exists():
-        return {"description": "", "tags": ""}
+        return {"description": "", "tags": "", "cleaned_script": ""}
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+        if "cleaned_script" not in data:
+            data["cleaned_script"] = ""
+        return data
 
 
 @app.post("/api/projects/{project_id}/seo-data")
@@ -377,7 +390,15 @@ def save_seo_data(project_id: str, body: SeoDataBody):
     project_dir = get_project_dir(project_id)
     path = project_dir / "seo_data.json"
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"description": body.description, "tags": body.tags}, f, indent=2)
+        json.dump(
+            {
+                "description": body.description,
+                "tags": body.tags,
+                "cleaned_script": body.cleaned_script,
+            },
+            f,
+            indent=2,
+        )
     return {"ok": True}
 
 

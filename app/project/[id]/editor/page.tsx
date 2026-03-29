@@ -3,6 +3,7 @@
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { getProject, getSegments, getEditorState, saveEditorState, fileUrl, generateSubtitles, exportVideo, getJobStatus, stepComplete } from '@/lib/api';
+import { projectIdFromParams, encodeProjectIdForRoute, encodeProjectIdForPath } from '@/lib/projectId';
 import useToast from '@/hooks/useToast';
 import Toast from '@/components/Toast';
 
@@ -39,6 +40,11 @@ type SubtitleSettings = {
 };
 
 type Project = { id: string; title: string };
+type HistorySnapshot = {
+  segments: Segment[];
+  parkedSegments: Segment[];
+  transitions: Record<string, Transition>;
+};
 
 const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
   font_size: 48,
@@ -53,7 +59,7 @@ const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
 export default function EditorPage() {
   const params = useParams();
   const router = useRouter();
-  const id = typeof params.id === 'string' ? params.id : '';
+  const id = projectIdFromParams(params.id);
   const { toasts, showToast, removeToast } = useToast();
 
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -84,6 +90,7 @@ export default function EditorPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(0);
+  const currentTimeRef = useRef<number>(0);
   const timelineInnerRef = useRef<HTMLDivElement>(null);
   const timelineOuterRef = useRef<HTMLDivElement>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -98,8 +105,19 @@ export default function EditorPage() {
   const [movingSegmentId, setMovingSegmentId] = useState<number | null>(null);
   const [isSnapping, setIsSnapping] = useState(false);
   const [parkedSegments, setParkedSegments] = useState<Segment[]>([]);
-  const [history, setHistory] = useState<any[]>([]);
+  const [history, setHistory] = useState<HistorySnapshot[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
+  const historyRef = useRef<HistorySnapshot[]>([]);
+  const historyIndexRef = useRef<number>(-1);
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+  useEffect(() => {
+    historyIndexRef.current = historyIndex;
+  }, [historyIndex]);
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
 
   useEffect(() => {
     if (!id) return;
@@ -134,11 +152,13 @@ export default function EditorPage() {
           ? Math.max(...finalSegments.map((seg) => seg.end)) + 1.5
           : 0;
         setTotalDuration(duration);
-        setHistory([]);
-        setHistoryIndex(-1);
-        setTimeout(() => {
-          saveToHistory();
-        }, 0);
+        const initialSnapshot: HistorySnapshot = {
+          segments: JSON.parse(JSON.stringify(finalSegments)),
+          parkedSegments: JSON.parse(JSON.stringify((editorState.parkedSegments as Segment[] | undefined) || [])),
+          transitions: JSON.parse(JSON.stringify((editorState.transitions as Record<string, Transition> | undefined) || {})),
+        };
+        setHistory([initialSnapshot]);
+        setHistoryIndex(0);
       } catch (err) {
         showToast(err instanceof Error ? err.message : 'Request failed', 'error');
       } finally {
@@ -185,8 +205,11 @@ export default function EditorPage() {
     const height = 720;
 
     const activeSeg = segments.find((s) => s.start <= time && time < s.end);
-    if (activeSeg) {
-      const img = preloadedImages[activeSeg.segment_id.toString()];
+    const lastSegment = segments.length > 0 ? segments[segments.length - 1] : null;
+    const isTailZone = !!lastSegment && time >= lastSegment.end && time <= totalDuration;
+    const segmentToRender = activeSeg ?? (isTailZone ? lastSegment : null);
+    if (segmentToRender) {
+      const img = preloadedImages[segmentToRender.segment_id.toString()];
       if (img && img.complete && img.naturalWidth > 0) {
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         // Check if we are in a fade transition zone
@@ -259,27 +282,28 @@ export default function EditorPage() {
         ctx.textAlign = 'center';
       }
     }
-  }, [segments, subtitles, subtitleSettings, preloadedImages, transitions]);
+  }, [segments, subtitles, subtitleSettings, preloadedImages, transitions, totalDuration]);
 
   useEffect(() => {
     renderFrame(currentTime);
   }, [currentTime, segments, subtitles, renderFrame]);
 
   useEffect(() => {
+    const audioEl = audioRef.current;
     if (!isPlaying) {
       if (rafRef.current != null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      if (audioRef.current) {
-        audioRef.current.pause();
+      if (audioEl) {
+        audioEl.pause();
       }
       return;
     }
-    if (audioRef.current) {
-      audioRef.current.currentTime = currentTime;
-      audioRef.current.playbackRate = playbackSpeed;
-      audioRef.current.play();
+    if (audioEl) {
+      audioEl.currentTime = currentTimeRef.current;
+      audioEl.playbackRate = playbackSpeed;
+      audioEl.play();
     }
     lastTimeRef.current = performance.now();
     const loop = () => {
@@ -302,8 +326,8 @@ export default function EditorPage() {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      if (audioRef.current) {
-        audioRef.current.pause();
+      if (audioEl) {
+        audioEl.pause();
       }
     };
   }, [isPlaying, totalDuration, playbackSpeed]);
@@ -387,54 +411,65 @@ export default function EditorPage() {
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
-  const updateTotalDuration = useCallback(() => {
-    const maxEnd = segments.length > 0
-      ? Math.max(...segments.map((seg) => seg.end))
+  const updateTotalDuration = useCallback((nextSegments?: Segment[]) => {
+    const source = nextSegments ?? segments;
+    const maxEnd = source.length > 0
+      ? Math.max(...source.map((seg) => seg.end))
       : 0;
     setTotalDuration(maxEnd + 1.5);
   }, [segments]);
 
-  // Undo/Redo helpers - Step 7 update
-  const saveToHistory = useCallback(() => {
-    const currentState = {
+  const buildSnapshot = useCallback((): HistorySnapshot => {
+    return {
       segments: JSON.parse(JSON.stringify(segments)),
       parkedSegments: JSON.parse(JSON.stringify(parkedSegments)),
       transitions: JSON.parse(JSON.stringify(transitions)),
-      // We will expand this later for transitions, subtitles, etc.
     };
+  }, [segments, parkedSegments, transitions]);
+
+  const applySnapshot = useCallback((snapshot: HistorySnapshot) => {
+    setSegments(snapshot.segments || []);
+    setParkedSegments(snapshot.parkedSegments || []);
+    setTransitions(snapshot.transitions || {});
+    updateTotalDuration(snapshot.segments || []);
+  }, [updateTotalDuration]);
+
+  // Undo/Redo helpers
+  const saveToHistory = useCallback((snapshot?: HistorySnapshot) => {
+    const currentState = snapshot ?? buildSnapshot();
     setHistory((prev) => {
-      const newHistory = prev.slice(0, historyIndex + 1);
+      const newHistory = prev.slice(0, historyIndexRef.current + 1);
+      const last = newHistory[newHistory.length - 1];
+      if (last && JSON.stringify(last) === JSON.stringify(currentState)) {
+        return prev;
+      }
       newHistory.push(currentState);
+      historyRef.current = newHistory;
+      historyIndexRef.current = newHistory.length - 1;
       setHistoryIndex(newHistory.length - 1);
       return newHistory;
     });
-  }, [segments, parkedSegments, transitions, historyIndex]);
+  }, [buildSnapshot]);
 
   const performUndo = useCallback(() => {
-    if (historyIndex <= 0) return;
-    const previousState = history[historyIndex - 1];
+    const idx = historyIndexRef.current;
+    if (idx <= 0) return;
+    const previousState = historyRef.current[idx - 1];
     if (!previousState) return;
-
-    setSegments(previousState.segments);
-    setParkedSegments(previousState.parkedSegments || []);
-    setTransitions(previousState.transitions || {});
-    updateTotalDuration();
-
-    setHistoryIndex(prev => prev - 1);
-  }, [history, historyIndex, setSegments, setParkedSegments, setTransitions]);
+    applySnapshot(previousState);
+    historyIndexRef.current = idx - 1;
+    setHistoryIndex(idx - 1);
+  }, [applySnapshot]);
 
   const performRedo = useCallback(() => {
-    if (historyIndex >= history.length - 1) return;
-    const nextState = history[historyIndex + 1];
+    const idx = historyIndexRef.current;
+    if (idx >= historyRef.current.length - 1) return;
+    const nextState = historyRef.current[idx + 1];
     if (!nextState) return;
-
-    setSegments(nextState.segments);
-    setParkedSegments(nextState.parkedSegments || []);
-    setTransitions(nextState.transitions || {});
-    updateTotalDuration();
-
-    setHistoryIndex(prev => prev + 1);
-  }, [history, historyIndex, setSegments, setParkedSegments, setTransitions]);
+    applySnapshot(nextState);
+    historyIndexRef.current = idx + 1;
+    setHistoryIndex(idx + 1);
+  }, [applySnapshot]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -490,15 +525,10 @@ export default function EditorPage() {
     [autoSave]
   );
 
-  const handleBack = () => router.push(`/project/${id}`);
+  const handleBack = () => router.push(`/project/${encodeProjectIdForRoute(id)}`);
 
   const buildEditorState = () => ({
-    segments: segments.map((seg, idx, arr) => {
-      if (idx === arr.length - 1) {
-        return { ...seg, end: seg.end + 1.5 };
-      }
-      return seg;
-    }),
+    segments,
     parkedSegments,
     transitions,
     subtitles,
@@ -638,11 +668,12 @@ export default function EditorPage() {
               const imageName = seg.image;
               const formData = new FormData();
               formData.append('file', file);
-              await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/projects/${params.id}/replace-image/${imageName}`, {
+              const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+              await fetch(`${apiBase}/api/projects/${encodeProjectIdForPath(id)}/replace-image/${encodeURIComponent(imageName)}`, {
                 method: 'POST',
                 body: formData,
               });
-              const newUrl = `${process.env.NEXT_PUBLIC_API_URL}/api/projects/${params.id}/files/images/${imageName}?t=${Date.now()}`;
+              const newUrl = `${fileUrl(id, `images/${imageName}`)}?t=${Date.now()}`;
               saveToHistory();
               setSegments(prev =>
                 prev.map(s =>
@@ -675,7 +706,8 @@ export default function EditorPage() {
               const newImageName = `${newId}.png`;
               const formData = new FormData();
               formData.append('file', file);
-              await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/projects/${params.id}/replace-image/${newImageName}`, {
+              const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+              await fetch(`${apiBase}/api/projects/${encodeProjectIdForPath(id)}/replace-image/${encodeURIComponent(newImageName)}`, {
                 method: 'POST',
                 body: formData,
               });
@@ -698,7 +730,7 @@ export default function EditorPage() {
                 return next;
               });
               updateTotalDuration();
-              const newUrl = `${process.env.NEXT_PUBLIC_API_URL}/api/projects/${params.id}/files/images/${newImageName}?t=${Date.now()}`;
+              const newUrl = `${fileUrl(id, `images/${newImageName}`)}?t=${Date.now()}`;
               const img = new Image();
               img.src = newUrl;
               img.onload = () => {
@@ -1144,6 +1176,7 @@ export default function EditorPage() {
                 const onLeftMouseDown = (e: React.MouseEvent) => {
                   e.stopPropagation();
                   dragRef.current = { startX: e.clientX, startStart: seg.start, startEnd: seg.end, segmentId: seg.segment_id, side: 'left' };
+                  let didSaveResizeHistory = false;
                   const onMove = (e: MouseEvent) => {
                     if (!dragRef.current) return;
                     const innerEl = timelineInnerRef.current;
@@ -1154,11 +1187,16 @@ export default function EditorPage() {
                     if (Math.abs(newStart - currentTime) < snapThresholdL) {
                       newStart = currentTime;
                     }
-                    saveToHistory();
+                    if (!didSaveResizeHistory) {
+                      saveToHistory();
+                      didSaveResizeHistory = true;
+                    }
                     setSegments((prev) =>
                       prev.map((s) => (s.segment_id === dragRef.current!.segmentId ? { ...s, start: newStart } : s))
                     );
-                    updateTotalDuration();
+                    updateTotalDuration(
+                      segments.map((s) => (s.segment_id === dragRef.current!.segmentId ? { ...s, start: newStart } : s))
+                    );
                   };
                   const onUp = () => {
                     window.removeEventListener('mousemove', onMove);
@@ -1172,6 +1210,7 @@ export default function EditorPage() {
                 const onRightMouseDown = (e: React.MouseEvent) => {
                   e.stopPropagation();
                   dragRef.current = { startX: e.clientX, startStart: seg.start, startEnd: seg.end, segmentId: seg.segment_id, side: 'right' };
+                  let didSaveResizeHistory = false;
                   const onMove = (e: MouseEvent) => {
                     if (!dragRef.current) return;
                     const innerEl = timelineInnerRef.current;
@@ -1182,11 +1221,16 @@ export default function EditorPage() {
                     if (Math.abs(newEnd - currentTime) < snapThresholdR) {
                       newEnd = currentTime;
                     }
-                    saveToHistory();
+                    if (!didSaveResizeHistory) {
+                      saveToHistory();
+                      didSaveResizeHistory = true;
+                    }
                     setSegments((prev) =>
                       prev.map((s) => (s.segment_id === dragRef.current!.segmentId ? { ...s, end: newEnd } : s))
                     );
-                    updateTotalDuration();
+                    updateTotalDuration(
+                      segments.map((s) => (s.segment_id === dragRef.current!.segmentId ? { ...s, end: newEnd } : s))
+                    );
                   };
                   const onUp = () => {
                     window.removeEventListener('mousemove', onMove);
@@ -1231,7 +1275,6 @@ export default function EditorPage() {
                       const startY = e.clientY;
                       const isFromMainTrack = true; // we'll use this
 
-                      const segmentEl = e.currentTarget as HTMLElement;
                       const startX = e.clientX;
                       const startStart = seg.start;
                       const startEnd = seg.end;
@@ -1253,6 +1296,7 @@ export default function EditorPage() {
                             segments.find((s) => s.segment_id === segmentId) ??
                             parkedSegments.find((p) => p.segment_id === segmentId) ??
                             null;
+                          saveToHistory();
                           setMovingSegmentId(segmentId);
                         }
                         if (!didDrag) return;
@@ -1343,7 +1387,6 @@ export default function EditorPage() {
                         if (!didDrag) {
                           e.stopPropagation();
                           setSelectedSegmentId(prev => prev === segmentId ? null : segmentId);
-                          const rect = (segmentEl as HTMLElement).closest('[data-timeline-outer]')?.getBoundingClientRect();
                           const outerEl = timelineOuterRef.current;
                           if (outerEl) {
                             const outerRect = outerEl.getBoundingClientRect();
@@ -1358,7 +1401,6 @@ export default function EditorPage() {
                             }
                           }
                         } else {
-                          saveToHistory();
                           updateTotalDuration();
                           autoSave();
                         }
@@ -1612,7 +1654,7 @@ export default function EditorPage() {
               {exportDone && (
                 <button
                   type="button"
-                  onClick={async () => { try { await stepComplete(id, 6); } catch(_) {} router.push(`/project/${id}#step-7`); }}
+                  onClick={async () => { try { await stepComplete(id, 6); } catch {} router.push(`/project/${encodeProjectIdForRoute(id)}#step-7`); }}
                   className="rounded px-4 py-2 text-sm font-medium text-white"
                   style={{ backgroundColor: '#2A4A35' }}
                 >

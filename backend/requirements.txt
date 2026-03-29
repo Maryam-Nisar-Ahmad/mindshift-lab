@@ -1,7 +1,7 @@
 fastapi
 uvicorn[standard]
 python-multipart
-openai
+openai>=1.59.0
 python-dotenv
 rapidfuzz
 aiofiles

@@ -80,11 +80,15 @@ def build_and_export(project_id, project_dir, editor_state, job_status):
             ass_path = None
 
         cmd = ["ffmpeg", "-y"]
+        end_padding_seconds = float(editor_state.get("end_padding_seconds", 0.0) or 0.0)
         durations = []
-        for seg in segments:
+        for idx, seg in enumerate(segments):
             dur = seg.get("end", 0) - seg.get("start", 0)
             if dur <= 0:
                 dur = 4.0
+            # Add final-frame tail once at export time (silence comes from audio -shortest behavior).
+            if idx == len(segments) - 1 and end_padding_seconds > 0:
+                dur += end_padding_seconds
             durations.append(dur)
             img_name = seg.get("image", str(len(durations) - 1) + ".png")
             if not img_name.lower().endswith(".png"):

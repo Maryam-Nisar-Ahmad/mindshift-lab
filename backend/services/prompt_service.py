@@ -374,11 +374,22 @@ def _strip_mj_params(text):
     return text.strip()
 
 
-def _build_mj_line(prompt_text, character):
+def _append_scene_marker(prompt_text, segment_id):
+    text = (prompt_text or '').strip()
+    if not text:
+        return text
+    # Append deterministic numeric scene id marker at the end of the prompt
+    # text (before MJ params) without changing upstream generation logic.
+    if re.search(rf'\b{segment_id}\b\s*$', text):
+        return text
+    return f'{text} {segment_id}'
+
+
+def _build_mj_line(prompt_text, character, segment_id):
     # All characters get sref only — no cref for any character type.
     # Character consistency is maintained through precise text descriptions
     # and the shared --sref style reference, not --cref which locked poses.
-    clean = _strip_mj_params(prompt_text)
+    clean = _append_scene_marker(_strip_mj_params(prompt_text), segment_id)
     parts = [p for p in [clean, SREF, STYLE_TAIL] if p]
     return re.sub(r'  +', ' ', ' '.join(parts))
 
@@ -447,7 +458,7 @@ async def generate_mj_prompts(project_id, script_text, job_status):
             'character': character,
             'act': act,
             'prompt_text': prompt_text,
-            'mj_line': _build_mj_line(prompt_text, character),
+            'mj_line': _build_mj_line(prompt_text, character, segment_id),
         })
     job_status['status'] = 'done'
     job_status['percent'] = 100
@@ -491,5 +502,5 @@ async def regenerate_single_prompt(segment_text, segment_id):
         'character': character,
         'act': act,
         'prompt_text': prompt_text,
-        'mj_line': _build_mj_line(prompt_text, character),
+        'mj_line': _build_mj_line(prompt_text, character, segment_id),
     }
