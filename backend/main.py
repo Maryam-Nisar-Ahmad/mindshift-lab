@@ -117,8 +117,10 @@ class CleanScriptBody(BaseModel):
 
 
 class SeoDataBody(BaseModel):
-    description: str
-    tags: str
+    description: str = ""
+    chapter_timestamps: str = ""
+    tags: str = ""
+    seo_title: str = ""
     cleaned_script: str = ""
 
 
@@ -377,12 +379,22 @@ def get_seo_data(project_id: str):
     project_dir = get_project_dir(project_id)
     path = project_dir / "seo_data.json"
     if not path.exists():
-        return {"description": "", "tags": "", "cleaned_script": ""}
+        return {
+            "description": "",
+            "chapter_timestamps": "",
+            "tags": "",
+            "seo_title": "",
+            "cleaned_script": "",
+        }
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-        if "cleaned_script" not in data:
-            data["cleaned_script"] = ""
-        return data
+        return {
+            "description": data.get("description", ""),
+            "chapter_timestamps": data.get("chapter_timestamps", ""),
+            "tags": data.get("tags", ""),
+            "seo_title": data.get("seo_title", ""),
+            "cleaned_script": data.get("cleaned_script", ""),
+        }
 
 
 @app.post("/api/projects/{project_id}/seo-data")
@@ -393,7 +405,9 @@ def save_seo_data(project_id: str, body: SeoDataBody):
         json.dump(
             {
                 "description": body.description,
+                "chapter_timestamps": body.chapter_timestamps,
                 "tags": body.tags,
+                "seo_title": body.seo_title,
                 "cleaned_script": body.cleaned_script,
             },
             f,

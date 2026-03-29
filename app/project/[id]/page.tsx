@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getProject, resetStep, deleteProject, getPromptTemplate, updateTitle, stepComplete, cleanScript, saveScript, getPrompts, generatePrompts, getJobStatus, checkImages, regeneratePrompt, fileUrl, uploadAudio, getAudioStatus, assembleSegments, getSeoData, saveSeoData } from '@/lib/api';
+import { getProject, resetStep, deleteProject, getPromptTemplate, updateTitle, stepComplete, cleanScript, saveScript, getPrompts, generatePrompts, getJobStatus, checkImages, regeneratePrompt, fileUrl, uploadAudio, getAudioStatus, assembleSegments, getSeoData, saveSeoData, type SeoDataPayload } from '@/lib/api';
 import { projectIdFromParams, encodeProjectIdForRoute } from '@/lib/projectId';
 import useToast from '@/hooks/useToast';
 import Toast from '@/components/Toast';
@@ -24,6 +24,34 @@ const STEPS = [
   { num: 7, name: 'SEO Description' },
   { num: 8, name: 'Final Review' },
 ];
+
+function Step8FieldCopyButton({
+  ariaLabel,
+  copied,
+  onCopy,
+}: {
+  ariaLabel: string;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      className="absolute top-2 right-2 z-10 rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+      onClick={onCopy}
+    >
+      {copied ? (
+        <span className="text-xs font-medium text-emerald-400">✓</span>
+      ) : (
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+          <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+        </svg>
+      )}
+    </button>
+  );
+}
 
 export default function ProjectPage() {
   const params = useParams();
@@ -57,53 +85,36 @@ export default function ProjectPage() {
   const [step5Result, setStep5Result] = useState<{ duration_sec?: number; word_count?: number; words_corrected?: number } | null>(null);
   const [step5Error, setStep5Error] = useState<string | null>(null);
   const [step7Combined, setStep7Combined] = useState<string>('');
-  const [step7OutputText, setStep7OutputText] = useState('');
-  const [step8CleanedScript, setStep8CleanedScript] = useState<string>('');
   const [step7Copied, setStep7Copied] = useState(false);
   const [thumbnailReviewPrompt, setThumbnailReviewPrompt] = useState('');
-  const [step8Description, setStep8Description] = useState('');
-  const [step8Tags, setStep8Tags] = useState('');
+  const [seoYoutubeDescription, setSeoYoutubeDescription] = useState('');
+  const [seoChapterTimestamps, setSeoChapterTimestamps] = useState('');
+  const [seoTags, setSeoTags] = useState('');
+  const [seoTitleField, setSeoTitleField] = useState('');
+  const [step8CopiedField, setStep8CopiedField] = useState<string | null>(null);
+  const step8CopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [everActiveSteps, setEverActiveSteps] = useState<Record<string, boolean>>({});
   const [manuallyExpandedSteps, setManuallyExpandedSteps] = useState<Record<string, boolean>>({});
   const promptDoneSoundPlayedRef = useRef<string | null>(null);
 
-  const parseStep7Deliverables = useCallback((text: string) => {
-    const src = (text || '').replace(/\r\n/g, '\n');
-    const extractSection = (labels: string[], nextLabels: string[]) => {
-      const labelPattern = labels.join('|');
-      const nextPattern = nextLabels.join('|');
-      const rx = new RegExp(
-        `(?:^|\\n)\\s*(?:\\d+[\\).:-]?\\s*)?(?:${labelPattern})\\s*[:\\-]?\\s*([\\s\\S]*?)(?=\\n\\s*(?:\\d+[\\).:-]?\\s*)?(?:${nextPattern})\\s*[:\\-]?|$)`,
-        'i'
-      );
-      const match = src.match(rx);
-      return (match?.[1] || '').trim();
-    };
-
-    const videoTitle = extractSection(
-      ['video\\s*title', 'title'],
-      ['seo\\s*description', 'description', 'tags?', 'cleaned\\s*script']
-    );
-    const description = extractSection(
-      ['seo\\s*description', 'description'],
-      ['tags?', 'cleaned\\s*script']
-    );
-    const tagsRaw = extractSection(
-      ['tags?'],
-      ['cleaned\\s*script']
-    );
-    const cleanedScript = extractSection(
-      ['cleaned\\s*script', 'script'],
-      ['$a']
-    );
-    const tags = tagsRaw
-      .split('\n')
-      .map((x) => x.replace(/^[-*•]\s*/, '').trim())
-      .filter(Boolean)
-      .join(', ');
-
-    return { videoTitle, description, tags, cleanedScript };
-  }, []);
+  const copyStep8Field = useCallback(
+    (fieldKey: string, text: string) => {
+      const value = (text ?? '').trim();
+      if (!value) {
+        showToast('Nothing to copy', 'error');
+        return;
+      }
+      navigator.clipboard
+        .writeText(text ?? '')
+        .then(() => {
+          setStep8CopiedField(fieldKey);
+          if (step8CopyTimeoutRef.current) clearTimeout(step8CopyTimeoutRef.current);
+          step8CopyTimeoutRef.current = setTimeout(() => setStep8CopiedField(null), 2000);
+        })
+        .catch(() => showToast('Copy failed', 'error'));
+    },
+    [showToast]
+  );
 
   const fetchProject = useCallback(() => {
     if (!id) {
@@ -249,15 +260,15 @@ export default function ProjectPage() {
     }
   }, [id, displayStep]);
   useEffect(() => {
-    if (id && displayStep === 8) {
-      getSeoData(id)
-        .then((data) => {
-          setStep8Description(data.description ?? '');
-          setStep8Tags(data.tags ?? '');
-          setStep8CleanedScript(data.cleaned_script ?? '');
-        })
-        .catch(() => {});
-    }
+    if (!id || (displayStep !== 7 && displayStep !== 8)) return;
+    getSeoData(id)
+      .then((data: SeoDataPayload) => {
+        setSeoYoutubeDescription(data.description ?? '');
+        setSeoChapterTimestamps(data.chapter_timestamps ?? '');
+        setSeoTags(data.tags ?? '');
+        setSeoTitleField(data.seo_title ?? '');
+      })
+      .catch(() => {});
   }, [id, displayStep]);
   useEffect(() => {
     if (id && displayStep === 4.5) {
@@ -279,7 +290,6 @@ export default function ProjectPage() {
         .then(([tpl, script]) => {
           const combined = (tpl + (project?.title ? '\n\n' + project.title : '') + (script ? '\n\n' + script : '')).trim();
           setStep7Combined(combined);
-          setStep7OutputText('');
         })
         .catch((err) => showToast(err instanceof Error ? err.message : 'Request failed', 'error'));
     }
@@ -946,64 +956,66 @@ export default function ProjectPage() {
                         </button>
                         <pre className="whitespace-pre-wrap pr-16">{step7Combined || 'Loading…'}</pre>
                       </div>
-                      <textarea
-                        value={step7OutputText}
-                        onChange={(e) => setStep7OutputText(e.target.value)}
-                        placeholder="Paste your SEO result here"
-                        className="mt-3 w-full h-40 rounded font-mono text-sm resize-y border focus:border-[#3DBA6F] focus:outline-none"
-                        style={{ backgroundColor: '#0D1A12', borderColor: '#2A4A35', color: '#F0F4F0' }}
-                      />
-                      <div className="mt-2 flex gap-2">
-                        <button
-                          type="button"
-                          className="rounded px-3 py-1.5 text-sm font-medium border border-amber-500 text-amber-500 hover:bg-amber-500/10"
-                          onClick={() => {
-                            if (!id || !step7OutputText.trim()) return;
-                            const cleanInstruction = [
-                              'Clean and normalize this Step-7 AI response.',
-                              'Return EXACTLY these four sections in order:',
-                              '1. Video Title:',
-                              '2. SEO Description:',
-                              '3. Tags:',
-                              '4. Cleaned Script:',
-                              '',
-                              'Keep meaning unchanged, fix grammar/formatting, and keep tags concise/comma-separated.',
-                              '',
-                              'INPUT:',
-                              step7OutputText,
-                            ].join('\n');
-                            cleanScript(id, cleanInstruction)
-                              .then((r: { cleaned_script?: string }) => {
-                                const cleaned = r?.cleaned_script ?? step7OutputText;
-                                const parsed = parseStep7Deliverables(cleaned);
-                                setStep7OutputText(cleaned);
-                                if (parsed.description) setStep8Description(parsed.description);
-                                if (parsed.tags) setStep8Tags(parsed.tags);
-                                setStep8CleanedScript(parsed.cleanedScript || cleaned);
-                                showToast('Step 7 deliverables cleaned and mapped', 'success');
-                              })
-                              .catch((err) => showToast(err instanceof Error ? err.message : 'Clean failed', 'error'));
-                          }}
-                        >
-                          Clean with AI
-                        </button>
+                      <div className="mt-4 space-y-4">
+                        <div>
+                          <label className="block text-sm text-zinc-400 mb-1">YouTube description</label>
+                          <textarea
+                            value={seoYoutubeDescription}
+                            onChange={(e) => setSeoYoutubeDescription(e.target.value)}
+                            className="w-full min-h-[120px] rounded font-mono text-sm resize-y border focus:border-[#3DBA6F] focus:outline-none p-3"
+                            style={{ backgroundColor: '#0D1A12', borderColor: '#2A4A35', color: '#F0F4F0' }}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-zinc-400 mb-1">Chapter timestamps</label>
+                          <textarea
+                            value={seoChapterTimestamps}
+                            onChange={(e) => setSeoChapterTimestamps(e.target.value)}
+                            className="w-full min-h-[100px] rounded font-mono text-sm resize-y border focus:border-[#3DBA6F] focus:outline-none p-3"
+                            style={{ backgroundColor: '#0D1A12', borderColor: '#2A4A35', color: '#F0F4F0' }}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-zinc-400 mb-1">Tags</label>
+                          <textarea
+                            value={seoTags}
+                            onChange={(e) => setSeoTags(e.target.value)}
+                            placeholder="Comma-separated or one per line"
+                            className="w-full min-h-[80px] rounded font-mono text-sm resize-y border focus:border-[#3DBA6F] focus:outline-none p-3"
+                            style={{ backgroundColor: '#0D1A12', borderColor: '#2A4A35', color: '#F0F4F0' }}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-zinc-400 mb-1">SEO title</label>
+                          <input
+                            type="text"
+                            value={seoTitleField}
+                            onChange={(e) => setSeoTitleField(e.target.value)}
+                            className="w-full rounded font-mono text-sm border focus:border-[#3DBA6F] focus:outline-none p-3"
+                            style={{ backgroundColor: '#0D1A12', borderColor: '#2A4A35', color: '#F0F4F0' }}
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-3">
                         <button
                           type="button"
                           className="rounded px-3 py-1.5 text-sm font-medium text-white"
                           style={{ backgroundColor: '#3DBA6F' }}
                           onClick={() => {
                             if (!id) return;
-                            const parsed = parseStep7Deliverables(step7OutputText);
-                            const nextDescription = parsed.description || step8Description;
-                            const nextTags = parsed.tags || step8Tags;
-                            const nextCleanedScript = parsed.cleanedScript || step8CleanedScript || step7OutputText;
-                            setStep8Description(nextDescription);
-                            setStep8Tags(nextTags);
-                            setStep8CleanedScript(nextCleanedScript);
-                            saveSeoData(id, { description: nextDescription, tags: nextTags, cleaned_script: nextCleanedScript })
-                              .then(() => saveScript(id, step7OutputText, true))
+                            const payload: SeoDataPayload = {
+                              description: seoYoutubeDescription,
+                              chapter_timestamps: seoChapterTimestamps,
+                              tags: seoTags,
+                              seo_title: seoTitleField,
+                              cleaned_script: '',
+                            };
+                            saveSeoData(id, payload)
                               .then(() => stepComplete(id, 7))
-                              .then(() => { fetchProject(); showToast('Saved', 'success'); })
+                              .then(() => {
+                                fetchProject();
+                                showToast('Saved', 'success');
+                              })
                               .catch((err) => showToast(err instanceof Error ? err.message : 'Failed to save', 'error'));
                           }}
                         >
@@ -1018,42 +1030,76 @@ export default function ProjectPage() {
                       <div className="space-y-6">
                         <h3 className="text-lg font-semibold text-white">Final Review</h3>
 
-                        {/* 1. Video Title */}
                         <div>
                           <label className="block text-sm text-zinc-400 mb-1">Video Title</label>
                           <pre className="bg-zinc-900 p-4 rounded text-white whitespace-pre-wrap">{project?.title ?? '—'}</pre>
                         </div>
 
-                        {/* 2. SEO Description */}
                         <div>
-                          <label className="block text-sm text-zinc-400 mb-1">SEO Description</label>
-                          <textarea
-                            value={step8Description}
-                            onChange={(e) => setStep8Description(e.target.value)}
-                            className="w-full h-32 bg-zinc-900 text-white p-4 rounded border border-zinc-700"
-                          />
+                          <label className="block text-sm text-zinc-400 mb-1">YouTube description</label>
+                          <div className="relative">
+                            <Step8FieldCopyButton
+                              ariaLabel="Copy YouTube description"
+                              copied={step8CopiedField === 'seo-youtube'}
+                              onCopy={() => copyStep8Field('seo-youtube', seoYoutubeDescription)}
+                            />
+                            <textarea
+                              value={seoYoutubeDescription}
+                              onChange={(e) => setSeoYoutubeDescription(e.target.value)}
+                              className="w-full min-h-[120px] bg-zinc-900 text-white py-3 pl-4 pr-12 rounded border border-zinc-700 whitespace-pre-wrap"
+                            />
+                          </div>
                         </div>
 
-                        {/* 3. Tags */}
                         <div>
-                          <label className="block text-sm text-zinc-400 mb-1">Tags (comma separated)</label>
-                          <input
-                            type="text"
-                            value={step8Tags}
-                            onChange={(e) => setStep8Tags(e.target.value)}
-                            className="w-full bg-zinc-900 text-white p-4 rounded border border-zinc-700"
-                          />
+                          <label className="block text-sm text-zinc-400 mb-1">Chapter timestamps</label>
+                          <div className="relative">
+                            <Step8FieldCopyButton
+                              ariaLabel="Copy chapter timestamps"
+                              copied={step8CopiedField === 'seo-chapters'}
+                              onCopy={() => copyStep8Field('seo-chapters', seoChapterTimestamps)}
+                            />
+                            <textarea
+                              value={seoChapterTimestamps}
+                              onChange={(e) => setSeoChapterTimestamps(e.target.value)}
+                              className="w-full min-h-[100px] bg-zinc-900 text-white py-3 pl-4 pr-12 rounded border border-zinc-700 whitespace-pre-wrap"
+                            />
+                          </div>
                         </div>
 
-                        {/* 4. Cleaned Script (new) */}
                         <div>
-                          <label className="block text-sm text-zinc-400 mb-1">Cleaned Script (from AI)</label>
-                          <pre className="bg-zinc-900 p-4 rounded text-white whitespace-pre-wrap max-h-60 overflow-auto">
-                            {step8CleanedScript || 'Run "Clean with AI" in Step 7 first'}
-                          </pre>
+                          <label className="block text-sm text-zinc-400 mb-1">Tags</label>
+                          <div className="relative">
+                            <Step8FieldCopyButton
+                              ariaLabel="Copy tags"
+                              copied={step8CopiedField === 'seo-tags'}
+                              onCopy={() => copyStep8Field('seo-tags', seoTags)}
+                            />
+                            <textarea
+                              value={seoTags}
+                              onChange={(e) => setSeoTags(e.target.value)}
+                              className="w-full min-h-[80px] bg-zinc-900 text-white py-3 pl-4 pr-12 rounded border border-zinc-700 whitespace-pre-wrap"
+                            />
+                          </div>
                         </div>
 
-                        {/* Exported Video File Path (at the very end) */}
+                        <div>
+                          <label className="block text-sm text-zinc-400 mb-1">SEO title</label>
+                          <div className="relative">
+                            <Step8FieldCopyButton
+                              ariaLabel="Copy SEO title"
+                              copied={step8CopiedField === 'seo-title'}
+                              onCopy={() => copyStep8Field('seo-title', seoTitleField)}
+                            />
+                            <input
+                              type="text"
+                              value={seoTitleField}
+                              onChange={(e) => setSeoTitleField(e.target.value)}
+                              className="w-full bg-zinc-900 text-white py-3 pl-4 pr-12 rounded border border-zinc-700"
+                            />
+                          </div>
+                        </div>
+
                         <div className="pt-4 border-t border-zinc-700">
                           <label className="block text-sm text-zinc-400 mb-1">Exported Video File Path</label>
                           <div className="bg-zinc-900 p-4 rounded text-emerald-400 font-mono text-sm break-all">
@@ -1065,7 +1111,14 @@ export default function ProjectPage() {
                           type="button"
                           onClick={() => {
                             if (!id) return;
-                            saveSeoData(id, { description: step8Description, tags: step8Tags, cleaned_script: step8CleanedScript })
+                            const payload: SeoDataPayload = {
+                              description: seoYoutubeDescription,
+                              chapter_timestamps: seoChapterTimestamps,
+                              tags: seoTags,
+                              seo_title: seoTitleField,
+                              cleaned_script: '',
+                            };
+                            saveSeoData(id, payload)
                               .then(() => stepComplete(id, 8))
                               .then(() => {
                                 fetchProject();

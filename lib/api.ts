@@ -226,13 +226,22 @@ export function fileUrl(id: string, path: string): string {
   return `${API}/api/projects/${pid(id)}/files/${safePath}`;
 }
 
-export async function getSeoData(id: string): Promise<{ description: string; tags: string; cleaned_script?: string }> {
+export type SeoDataPayload = {
+  description: string;
+  chapter_timestamps: string;
+  tags: string;
+  seo_title: string;
+  cleaned_script?: string;
+};
+
+export async function getSeoData(id: string): Promise<SeoDataPayload> {
   const res = await fetch(`${API}/api/projects/${pid(id)}/seo-data`);
-  if (!res.ok) return { description: '', tags: '', cleaned_script: '' };
+  if (!res.ok)
+    return { description: '', chapter_timestamps: '', tags: '', seo_title: '', cleaned_script: '' };
   return res.json();
 }
 
-export async function saveSeoData(id: string, data: { description: string; tags: string; cleaned_script?: string }): Promise<void> {
+export async function saveSeoData(id: string, data: SeoDataPayload): Promise<void> {
   await fetch(`${API}/api/projects/${pid(id)}/seo-data`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
