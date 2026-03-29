@@ -1201,14 +1201,22 @@ export default function EditorPage() {
                       saveToHistory();
                       didSaveResizeHistory = true;
                     }
-                    /** Trim: snap only to playhead and timeline ends — not neighbor clips (avoids forced gaps). */
+                    /**
+                     * Trim while dragging: snap to neighbors + playhead + timeline ends.
+                     * Mouseup does not re-snap — so you can release in a gap without a jump.
+                     */
                     const snapThreshold = totalDuration * 0.01;
                     let nextSegs: Segment[] | null = null;
                     setSegments((prev) => {
                       const self = prev.find((s) => s.segment_id === dragRef.current!.segmentId);
                       if (!self) return prev;
                       let newStart = Math.max(0, Math.min(self.end - 0.5, dragRef.current!.startStart + delta));
-                      const snapPoints = [currentTimeRef.current, 0, totalDuration];
+                      const snapPoints = [
+                        currentTimeRef.current,
+                        0,
+                        totalDuration,
+                        ...prev.filter((s) => s.segment_id !== self.segment_id).flatMap((s) => [s.start, s.end]),
+                      ];
                       newStart = snapTimeToNearest(newStart, snapPoints, snapThreshold);
                       newStart = Math.max(0, Math.min(self.end - 0.5, newStart));
                       nextSegs = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, start: newStart } : s));
@@ -1238,14 +1246,22 @@ export default function EditorPage() {
                       saveToHistory();
                       didSaveResizeHistory = true;
                     }
-                    /** Trim: snap only to playhead and timeline ends — not neighbor clips. */
+                    /**
+                     * Trim while dragging: snap to neighbors + playhead + timeline ends.
+                     * Mouseup does not re-snap — so you can release in a gap without a jump.
+                     */
                     const snapThreshold = totalDuration * 0.01;
                     let nextSegs: Segment[] | null = null;
                     setSegments((prev) => {
                       const self = prev.find((s) => s.segment_id === dragRef.current!.segmentId);
                       if (!self) return prev;
                       let newEnd = Math.max(self.start + 0.5, Math.min(totalDuration, dragRef.current!.startEnd + delta));
-                      const snapPoints = [currentTimeRef.current, 0, totalDuration];
+                      const snapPoints = [
+                        currentTimeRef.current,
+                        0,
+                        totalDuration,
+                        ...prev.filter((s) => s.segment_id !== self.segment_id).flatMap((s) => [s.start, s.end]),
+                      ];
                       newEnd = snapTimeToNearest(newEnd, snapPoints, snapThreshold);
                       newEnd = Math.max(self.start + 0.5, Math.min(totalDuration, newEnd));
                       nextSegs = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, end: newEnd } : s));
