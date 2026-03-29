@@ -937,6 +937,25 @@ export default function ProjectPage() {
                       </div>
                     </>
                   )}
+                  {num === 6 && (
+                    <>
+                      <p className="mt-4 text-white/85 text-sm leading-relaxed">
+                        The timeline, segments, subtitles, and export tools live in the{' '}
+                        <span className="text-white font-medium">assembly editor</span>. Open it anytime to change your edit — your saved project step stays where it is until you finish later steps.
+                      </p>
+                      <button
+                        type="button"
+                        className="mt-4 rounded px-3 py-2 text-sm font-medium text-white w-full sm:w-auto"
+                        style={{ backgroundColor: '#3DBA6F' }}
+                        onClick={() => {
+                          if (!id) return;
+                          router.push('/project/' + encodeProjectIdForRoute(id) + '/editor');
+                        }}
+                      >
+                        Open assembly editor
+                      </button>
+                    </>
+                  )}
                   {num === 7 && (
                     <>
                       <div className="mt-4 rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: '#0D1A12', borderLeftColor: '#3DBA6F', color: '#F0F4F0' }}>
@@ -1133,7 +1152,7 @@ export default function ProjectPage() {
                       </div>
                     </>
                   )}
-                  {num !== 1 && num !== 2 && num !== 3 && num !== 3.5 && num !== 4 && num !== 4.1 && num !== 4.5 && num !== 5 && num !== 7 && num !== 8 && <div className="h-24 rounded-lg bg-white/5" />}
+                  {num !== 1 && num !== 2 && num !== 3 && num !== 3.5 && num !== 4 && num !== 4.1 && num !== 4.5 && num !== 5 && num !== 6 && num !== 7 && num !== 8 && <div className="h-24 rounded-lg bg-white/5" />}
                 </div>
               )}
 

@@ -170,6 +170,9 @@ def create_project(body: CreateProjectBody):
     project_dir = VIDEOS_DIR / folder_name
     project_dir.mkdir(parents=True)
     (project_dir / "images").mkdir(exist_ok=True)
+    thumb_dir = project_dir / "thumbnail"
+    (thumb_dir / "working").mkdir(parents=True, exist_ok=True)
+    (thumb_dir / "final").mkdir(parents=True, exist_ok=True)
     meta = {"id": folder_name, "title": body.title, "current_step": 1}
     with open(project_dir / "meta.json", "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
