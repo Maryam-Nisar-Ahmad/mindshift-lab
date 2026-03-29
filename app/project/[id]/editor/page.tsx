@@ -46,6 +46,20 @@ type HistorySnapshot = {
   transitions: Record<string, Transition>;
 };
 
+/** Snap `value` to the nearest time in `points` if within `threshold` (seconds). */
+function snapTimeToNearest(value: number, points: number[], threshold: number): number {
+  let best = value;
+  let bestDist = Infinity;
+  for (const p of points) {
+    const d = Math.abs(value - p);
+    if (d <= threshold && d < bestDist) {
+      bestDist = d;
+      best = p;
+    }
+  }
+  return best;
+}
+
 const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
   font_size: 48,
   position: 'bottom',
@@ -1145,6 +1159,7 @@ export default function EditorPage() {
             className="overflow-x-auto rounded-xl relative"
             style={{ height: '4.8rem', backgroundColor: '#0A1510', overflowY: 'visible' }}
             onClick={(e) => {
+              if ((e.target as HTMLElement).closest('[data-timeline-segment]')) return;
               setMovingSegmentId(null);
               const rect = e.currentTarget.getBoundingClientRect();
               const scrollLeft = e.currentTarget.scrollLeft;
@@ -1182,26 +1197,49 @@ export default function EditorPage() {
                     const innerEl = timelineInnerRef.current;
                     const w = innerEl ? innerEl.offsetWidth : innerWidth;
                     const delta = ((e.clientX - dragRef.current.startX) / w) * totalDuration;
-                    let newStart = Math.max(0, Math.min(seg.end - 0.5, dragRef.current.startStart + delta));
-                    const snapThresholdL = totalDuration * 0.01;
-                    if (Math.abs(newStart - currentTime) < snapThresholdL) {
-                      newStart = currentTime;
-                    }
                     if (!didSaveResizeHistory) {
                       saveToHistory();
                       didSaveResizeHistory = true;
                     }
-                    setSegments((prev) =>
-                      prev.map((s) => (s.segment_id === dragRef.current!.segmentId ? { ...s, start: newStart } : s))
-                    );
-                    updateTotalDuration(
-                      segments.map((s) => (s.segment_id === dragRef.current!.segmentId ? { ...s, start: newStart } : s))
-                    );
+                    const snapThreshold = totalDuration * 0.01;
+                    let nextSegs: Segment[] | null = null;
+                    setSegments((prev) => {
+                      const self = prev.find((s) => s.segment_id === dragRef.current!.segmentId);
+                      if (!self) return prev;
+                      let newStart = Math.max(0, Math.min(self.end - 0.5, dragRef.current!.startStart + delta));
+                      const snapPoints = [
+                        currentTimeRef.current,
+                        0,
+                        totalDuration,
+                        ...prev.filter((s) => s.segment_id !== self.segment_id).flatMap((s) => [s.start, s.end]),
+                      ];
+                      newStart = snapTimeToNearest(newStart, snapPoints, snapThreshold);
+                      newStart = Math.max(0, Math.min(self.end - 0.5, newStart));
+                      nextSegs = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, start: newStart } : s));
+                      return nextSegs;
+                    });
+                    if (nextSegs) updateTotalDuration(nextSegs);
                   };
                   const onUp = () => {
                     window.removeEventListener('mousemove', onMove);
                     window.removeEventListener('mouseup', onUp);
                     dragRef.current = null;
+                    const snapThreshold = totalDuration * 0.01;
+                    setSegments((prev) => {
+                      const self = prev.find((s) => s.segment_id === seg.segment_id);
+                      if (!self) return prev;
+                      const snapPoints = [
+                        0,
+                        totalDuration,
+                        ...prev.filter((s) => s.segment_id !== self.segment_id).flatMap((s) => [s.start, s.end]),
+                      ];
+                      let newStart = snapTimeToNearest(self.start, snapPoints, snapThreshold);
+                      newStart = Math.max(0, Math.min(self.end - 0.5, newStart));
+                      if (Math.abs(newStart - self.start) < 1e-5) return prev;
+                      const next = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, start: newStart } : s));
+                      updateTotalDuration(next);
+                      return next;
+                    });
                     autoSave();
                   };
                   window.addEventListener('mousemove', onMove);
@@ -1216,26 +1254,49 @@ export default function EditorPage() {
                     const innerEl = timelineInnerRef.current;
                     const w = innerEl ? innerEl.offsetWidth : innerWidth;
                     const delta = ((e.clientX - dragRef.current.startX) / w) * totalDuration;
-                    let newEnd = Math.max(seg.start + 0.5, Math.min(totalDuration, dragRef.current.startEnd + delta));
-                    const snapThresholdR = totalDuration * 0.01;
-                    if (Math.abs(newEnd - currentTime) < snapThresholdR) {
-                      newEnd = currentTime;
-                    }
                     if (!didSaveResizeHistory) {
                       saveToHistory();
                       didSaveResizeHistory = true;
                     }
-                    setSegments((prev) =>
-                      prev.map((s) => (s.segment_id === dragRef.current!.segmentId ? { ...s, end: newEnd } : s))
-                    );
-                    updateTotalDuration(
-                      segments.map((s) => (s.segment_id === dragRef.current!.segmentId ? { ...s, end: newEnd } : s))
-                    );
+                    const snapThreshold = totalDuration * 0.01;
+                    let nextSegs: Segment[] | null = null;
+                    setSegments((prev) => {
+                      const self = prev.find((s) => s.segment_id === dragRef.current!.segmentId);
+                      if (!self) return prev;
+                      let newEnd = Math.max(self.start + 0.5, Math.min(totalDuration, dragRef.current!.startEnd + delta));
+                      const snapPoints = [
+                        currentTimeRef.current,
+                        0,
+                        totalDuration,
+                        ...prev.filter((s) => s.segment_id !== self.segment_id).flatMap((s) => [s.start, s.end]),
+                      ];
+                      newEnd = snapTimeToNearest(newEnd, snapPoints, snapThreshold);
+                      newEnd = Math.max(self.start + 0.5, Math.min(totalDuration, newEnd));
+                      nextSegs = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, end: newEnd } : s));
+                      return nextSegs;
+                    });
+                    if (nextSegs) updateTotalDuration(nextSegs);
                   };
                   const onUp = () => {
                     window.removeEventListener('mousemove', onMove);
                     window.removeEventListener('mouseup', onUp);
                     dragRef.current = null;
+                    const snapThreshold = totalDuration * 0.01;
+                    setSegments((prev) => {
+                      const self = prev.find((s) => s.segment_id === seg.segment_id);
+                      if (!self) return prev;
+                      const snapPoints = [
+                        0,
+                        totalDuration,
+                        ...prev.filter((s) => s.segment_id !== self.segment_id).flatMap((s) => [s.start, s.end]),
+                      ];
+                      let newEnd = snapTimeToNearest(self.end, snapPoints, snapThreshold);
+                      newEnd = Math.max(self.start + 0.5, Math.min(totalDuration, newEnd));
+                      if (Math.abs(newEnd - self.end) < 1e-5) return prev;
+                      const next = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, end: newEnd } : s));
+                      updateTotalDuration(next);
+                      return next;
+                    });
                     autoSave();
                   };
                   window.addEventListener('mousemove', onMove);
@@ -1267,11 +1328,11 @@ export default function EditorPage() {
                 return (
                   <div
                     key={seg.segment_id}
+                    data-timeline-segment="main"
                     className="absolute rounded border flex items-center gap-2 overflow-hidden"
                     onMouseDown={(e) => {
                       e.stopPropagation();
 
-                      const originalClickX = e.clientX;
                       const startY = e.clientY;
                       const isFromMainTrack = true; // we'll use this
 
@@ -1326,6 +1387,7 @@ export default function EditorPage() {
                         const snapPoints = [
                           0,
                           totalDuration,
+                          currentTimeRef.current,
                           ...liveSnapSegments
                             .filter((s) => s.segment_id !== segmentId)
                             .flatMap((s) => [s.start, s.end]),
@@ -1387,19 +1449,6 @@ export default function EditorPage() {
                         if (!didDrag) {
                           e.stopPropagation();
                           setSelectedSegmentId(prev => prev === segmentId ? null : segmentId);
-                          const outerEl = timelineOuterRef.current;
-                          if (outerEl) {
-                            const outerRect = outerEl.getBoundingClientRect();
-                            const scrollLeft = outerEl.scrollLeft;
-                            const x = originalClickX - outerRect.left + scrollLeft;
-                            const innerWidth = timelineContainerWidth * timelineZoom;
-                            const newTime = (x / innerWidth) * totalDuration;
-                            const seekTime = Math.max(0, Math.min(totalDuration, newTime));
-                            setCurrentTime(seekTime);
-                            if (audioRef.current) {
-                              audioRef.current.currentTime = seekTime;
-                            }
-                          }
                         } else {
                           updateTotalDuration();
                           autoSave();
@@ -1494,11 +1543,11 @@ export default function EditorPage() {
                   return (
                     <div
                       key={seg.segment_id}
+                      data-timeline-segment="parked"
                       className="absolute rounded border flex items-center gap-2 overflow-hidden"
                       onMouseDown={(e) => {
                         e.stopPropagation();
 
-                        const originalClickX = e.clientX;
                         const startY = e.clientY;
                         const segmentId = seg.segment_id; // from map
                         const currentSeg = parkedSegments.find((p) => p.segment_id === segmentId);
@@ -1570,20 +1619,6 @@ export default function EditorPage() {
 
                           if (!didRestore) {
                             setSelectedSegmentId(prev => prev === segmentId ? null : segmentId);
-
-                            const outerEl = timelineOuterRef.current;
-                            if (outerEl) {
-                              const outerRect = outerEl.getBoundingClientRect();
-                              const scrollLeft = outerEl.scrollLeft;
-                              const x = originalClickX - outerRect.left + scrollLeft;
-                              const innerWidth = timelineContainerWidth * timelineZoom;
-                              const newTime = (x / innerWidth) * totalDuration;
-                              const seekTime = Math.max(0, Math.min(totalDuration, newTime));
-                              setCurrentTime(seekTime);
-                              if (audioRef.current) {
-                                audioRef.current.currentTime = seekTime;
-                              }
-                            }
                           }
                         };
 
