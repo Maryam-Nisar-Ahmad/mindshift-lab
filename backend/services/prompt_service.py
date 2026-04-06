@@ -385,6 +385,183 @@ def _append_scene_marker(prompt_text, segment_id):
     return f'{text} {segment_id}'
 
 
+def _segment_header_positions(raw: str) -> list[tuple[int, int, int]]:
+    """Find each SEGMENT [N]: line — (segment_id, header_start, content_start)."""
+    pattern = re.compile(r'^\s*SEGMENT\s*\[?(\d+)\]?\s*:\s*$', re.MULTILINE | re.IGNORECASE)
+    matches = list(pattern.finditer(raw))
+    out: list[tuple[int, int, int]] = []
+    for i, m in enumerate(matches):
+        seg_id = int(m.group(1))
+        content_start = m.end()
+        out.append((seg_id, m.start(), content_start))
+    return out
+
+
+def _parse_response_blocks_by_segment_number(raw: str) -> dict[int, str]:
+    """Split model output into blocks keyed by segment index (1-based)."""
+    if not raw or not raw.strip():
+        return {}
+    trimmed = raw.strip()
+    pos = _segment_header_positions(trimmed)
+    if not pos:
+        return {}
+    blocks: dict[int, str] = {}
+    for i, (seg_id, _hs, content_start) in enumerate(pos):
+        end = pos[i + 1][1] if i + 1 < len(pos) else len(trimmed)
+        blocks[seg_id] = trimmed[content_start:end].strip()
+    return blocks
+
+
+def _extract_fields_from_block(block: str) -> tuple[str, str, str, str]:
+    scene_type_re = re.compile(r'SCENE\s+TYPE:\s*(.+)', re.IGNORECASE)
+    character_re = re.compile(r'CHARACTER:\s*(.+)', re.IGNORECASE)
+    act_re = re.compile(r'ACT:\s*(\d+)', re.IGNORECASE)
+    mj_re = re.compile(r'MIDJOURNEY_PROMPT:\s*(.*)', re.IGNORECASE | re.DOTALL)
+    scene_type = ''
+    character = ''
+    act = ''
+    prompt_text = ''
+    for line in block.split('\n'):
+        m = scene_type_re.match(line.strip())
+        if m:
+            scene_type = m.group(1).strip()
+        m = character_re.match(line.strip())
+        if m:
+            character = m.group(1).strip()
+        m = act_re.match(line.strip())
+        if m:
+            act = m.group(1).strip()
+        m = mj_re.match(line.strip())
+        if m:
+            prompt_text = m.group(1).strip()
+    if not prompt_text:
+        for line in block.split('\n'):
+            if 'MIDJOURNEY_PROMPT:' in line:
+                prompt_text = line.split('MIDJOURNEY_PROMPT:', 1)[-1].strip()
+                break
+    return scene_type, character, act, prompt_text
+
+
+def _pack_segment_batches(segments: list[str], max_chars: int) -> list[tuple[int, int]]:
+    """Greedy packs segment indices [lo, hi) so estimated user-message size stays under max_chars."""
+    if not segments:
+        return []
+    preamble = 280
+    per_header = 100
+    batches: list[tuple[int, int]] = []
+    start = 0
+    batch_chars = 0
+
+    for i, seg in enumerate(segments):
+        cost = per_header + len(seg)
+        need = (preamble + cost) if batch_chars == 0 else cost
+        if batch_chars + need > max_chars and i > start:
+            batches.append((start, i))
+            start = i
+            batch_chars = 0
+            need = preamble + cost
+        if batch_chars + need > max_chars and i == start:
+            batches.append((start, start + 1))
+            start = i + 1
+            batch_chars = 0
+            continue
+        batch_chars += need
+
+    if start < len(segments):
+        batches.append((start, len(segments)))
+    return batches
+
+
+async def _mj_fetch_parsed_batch(client, model, segments, lo: int, hi: int) -> dict[int, str]:
+    batch = segments[lo:hi]
+    lines = [
+        'Generate one MidJourney prompt for each narration segment below.\n',
+        'In your output, use SEGMENT [N]: headers where N matches the number in each --- SEGMENT N --- line below.\n',
+    ]
+    for i, seg in enumerate(batch):
+        global_idx = lo + i + 1
+        lines.append(f'--- SEGMENT {global_idx} ---')
+        lines.append(seg)
+        lines.append('')
+    user_message = '\n'.join(lines)
+    # DeepSeek enforces a provider-side max_tokens cap (often 1–8192). Clamp
+    # so the job never fails with invalid_request_error.
+    max_out_raw = int(os.getenv('MJ_PROMPT_MAX_OUTPUT_TOKENS', '8192'))
+    max_out = max(1, min(8192, max_out_raw))
+    timeout_s = float(os.getenv('MJ_PROMPT_CALL_TIMEOUT_SECONDS', '120'))
+    response = await client.chat.completions.create(
+        model=model,
+        temperature=1.0,
+        max_tokens=max_out,
+        messages=[
+            {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'user', 'content': user_message},
+        ],
+        timeout=timeout_s,
+    )
+    raw = response.choices[0].message.content or ''
+    parsed = _parse_response_blocks_by_segment_number(raw)
+    if not parsed and raw.strip():
+        blocks_fb = re.split(r'\n\s*\n', raw.strip())
+        for i, block in enumerate(blocks_fb):
+            if i >= len(batch):
+                break
+            parsed[lo + i + 1] = block
+    return parsed
+
+
+def _rows_from_parsed_batch(segments: list[str], lo: int, hi: int, parsed: dict[int, str]) -> list[dict]:
+    rows: list[dict] = []
+    for i in range(lo, hi):
+        segment_id = i + 1
+        segment_text = segments[i]
+        block = parsed.get(segment_id, '')
+        scene_type, character, act, prompt_text = _extract_fields_from_block(block)
+        rows.append({
+            'segment_id': segment_id,
+            'segment_text': segment_text,
+            'scene_type': scene_type,
+            'character': character,
+            'act': act,
+            'prompt_text': prompt_text,
+            'mj_line': _build_mj_line(prompt_text, character, segment_id),
+        })
+    return rows
+
+
+async def _mj_prompt_range(client, model, segments: list[str], lo: int, hi: int, *, allow_retry_single: bool) -> list[dict]:
+    """One or more API calls covering [lo, hi). Splits recursively if output truncates."""
+    if lo >= hi:
+        return []
+    try:
+        parsed = await _mj_fetch_parsed_batch(client, model, segments, lo, hi)
+    except Exception:
+        # If a batch call is slow/fails, split and continue so one request never stalls the whole job.
+        if hi - lo > 1:
+            mid = lo + (hi - lo) // 2
+            left = await _mj_prompt_range(client, model, segments, lo, mid, allow_retry_single=True)
+            right = await _mj_prompt_range(client, model, segments, mid, hi, allow_retry_single=True)
+            return left + right
+        raise
+    rows = _rows_from_parsed_batch(segments, lo, hi, parsed)
+    if all((r.get('prompt_text') or '').strip() for r in rows):
+        return rows
+
+    if hi - lo > 1:
+        mid = lo + (hi - lo) // 2
+        left = await _mj_prompt_range(client, model, segments, lo, mid, allow_retry_single=True)
+        right = await _mj_prompt_range(client, model, segments, mid, hi, allow_retry_single=True)
+        return left + right
+
+    if allow_retry_single:
+        parsed2 = await _mj_fetch_parsed_batch(client, model, segments, lo, hi)
+        rows2 = _rows_from_parsed_batch(segments, lo, hi, parsed2)
+        if any((r.get('prompt_text') or '').strip() for r in rows2):
+            return rows2
+
+    return rows
+
+
 def _build_mj_line(prompt_text, character, segment_id):
     # All characters get sref only — no cref for any character type.
     # Character consistency is maintained through precise text descriptions
@@ -398,68 +575,33 @@ async def generate_mj_prompts(project_id, script_text, job_status):
     job_status['status'] = 'splitting'
     job_status['percent'] = 0
     segments = await split_script_to_segments(script_text)
+    n = len(segments)
     job_status['status'] = 'generating'
     job_status['percent'] = 10
+    if n == 0:
+        job_status['status'] = 'done'
+        job_status['percent'] = 100
+        return []
+
+    # Long scripts: pack requests by character budget, then recursively split any batch
+    # that still truncates. Same SYSTEM_PROMPT and per-segment task as before.
+    max_user_chars = max(2500, int(os.getenv('MJ_PROMPT_USER_MAX_CHARS', '4500')))
     client = AsyncOpenAI(api_key=os.getenv('DEEPSEEK_API_KEY'), base_url='https://api.deepseek.com')
-    lines = ['Generate one MidJourney prompt for each narration segment below.\n']
-    for i, seg in enumerate(segments, 1):
-        lines.append(f'--- SEGMENT {i} ---')
-        lines.append(seg)
-        lines.append('')
-    user_message = '\n'.join(lines)
-    response = await client.chat.completions.create(
-        model=os.getenv('DEEPSEEK_REASONER_MODEL', 'deepseek-reasoner'),
-        temperature=1.0,
-        max_tokens=32000,
-        messages=[
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            {'role': 'user', 'content': user_message},
-        ],
-    )
-    raw = response.choices[0].message.content or ''
-    job_status['percent'] = 90
-    blocks = re.split(r'\n\s*\n', raw.strip())
-    results = []
-    scene_type_re = re.compile(r'SCENE\s+TYPE:\s*(.+)', re.IGNORECASE)
-    character_re = re.compile(r'CHARACTER:\s*(.+)', re.IGNORECASE)
-    act_re = re.compile(r'ACT:\s*(\d+)', re.IGNORECASE)
-    mj_re = re.compile(r'MIDJOURNEY_PROMPT:\s*(.*)', re.IGNORECASE | re.DOTALL)
-    for idx, block in enumerate(blocks):
-        if idx >= len(segments):
-            break
-        segment_text = segments[idx] if idx < len(segments) else ''
-        segment_id = idx + 1
-        scene_type = ''
-        character = ''
-        act = ''
-        prompt_text = ''
-        for line in block.split('\n'):
-            m = scene_type_re.match(line.strip())
-            if m:
-                scene_type = m.group(1).strip()
-            m = character_re.match(line.strip())
-            if m:
-                character = m.group(1).strip()
-            m = act_re.match(line.strip())
-            if m:
-                act = m.group(1).strip()
-            m = mj_re.match(line.strip())
-            if m:
-                prompt_text = m.group(1).strip()
-        if not prompt_text:
-            for line in block.split('\n'):
-                if 'MIDJOURNEY_PROMPT:' in line:
-                    prompt_text = line.split('MIDJOURNEY_PROMPT:', 1)[-1].strip()
-                    break
-        results.append({
-            'segment_id': segment_id,
-            'segment_text': segment_text,
-            'scene_type': scene_type,
-            'character': character,
-            'act': act,
-            'prompt_text': prompt_text,
-            'mj_line': _build_mj_line(prompt_text, character, segment_id),
-        })
+    model = os.getenv('DEEPSEEK_REASONER_MODEL', 'deepseek-reasoner')
+    results: list[dict] = []
+    batch_sz_env = os.getenv('MJ_PROMPT_BATCH_SIZE')
+    if batch_sz_env:
+        bs = max(1, int(batch_sz_env))
+        packed = [(lo, min(lo + bs, n)) for lo in range(0, n, bs)]
+    else:
+        packed = _pack_segment_batches(segments, max_user_chars)
+    done = 0
+    for lo, hi in packed:
+        part = await _mj_prompt_range(client, model, segments, lo, hi, allow_retry_single=True)
+        results.extend(part)
+        done += hi - lo
+        job_status['percent'] = 10 + int(85 * done / max(n, 1))
+
     job_status['status'] = 'done'
     job_status['percent'] = 100
     return results

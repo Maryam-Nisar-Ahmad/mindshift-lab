@@ -1105,7 +1105,7 @@ export default function EditorPage() {
             >−</button>
             <span className="text-[color:var(--garden-text-soft)] text-xs w-8 text-center">{timelineZoom}x</span>
             <button
-              onClick={() => setTimelineZoom(z => Math.min(10, parseFloat((z + zoomStep).toFixed(1))))}
+              onClick={() => setTimelineZoom(z => Math.min(100, parseFloat((z + zoomStep).toFixed(1))))}
               className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-0.5 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)]"
             >+</button>
             <button
@@ -1115,7 +1115,7 @@ export default function EditorPage() {
             <input
               type="range"
               min={1}
-              max={10}
+              max={100}
               step={0.1}
               value={timelineZoom}
               onChange={e => setTimelineZoom(Number(e.target.value))}
@@ -1166,32 +1166,43 @@ export default function EditorPage() {
           )}
           <div
             ref={timelineOuterRef}
-            className="overflow-x-auto rounded-xl relative"
-            style={{ height: '4.8rem', backgroundColor: 'var(--garden-timeline)', overflowY: 'visible' }}
-            onClick={(e) => {
-              if ((e.target as HTMLElement).closest('[data-timeline-segment]')) return;
-              setMovingSegmentId(null);
-              const rect = e.currentTarget.getBoundingClientRect();
-              const scrollLeft = e.currentTarget.scrollLeft;
-              const x = e.clientX - rect.left + scrollLeft;
-              const innerWidth = timelineContainerWidth * timelineZoom;
-              const newTime = (x / innerWidth) * totalDuration;
-              const seekTime = Math.max(0, Math.min(totalDuration, newTime));
-              setCurrentTime(seekTime);
-              if (audioRef.current) {
-                audioRef.current.currentTime = seekTime;
-              }
-            }}
+            className="overflow-x-auto overflow-y-hidden rounded-xl relative"
+            style={{ backgroundColor: 'var(--garden-timeline)' }}
           >
             <div
-              ref={timelineInnerRef}
-              className="relative h-full"
               style={{
                 width: timelineContainerWidth * timelineZoom,
                 minWidth: '100%',
-                minHeight: '80px',
               }}
             >
+              <div
+                className="relative"
+                style={{ height: '4.8rem' }}
+                onClick={(e) => {
+                  if ((e.target as HTMLElement).closest('[data-timeline-segment]')) return;
+                  setMovingSegmentId(null);
+                  const outer = timelineOuterRef.current;
+                  if (!outer) return;
+                  const rect = outer.getBoundingClientRect();
+                  const scrollLeft = outer.scrollLeft;
+                  const x = e.clientX - rect.left + scrollLeft;
+                  const innerWidth = timelineContainerWidth * timelineZoom;
+                  const newTime = (x / innerWidth) * totalDuration;
+                  const seekTime = Math.max(0, Math.min(totalDuration, newTime));
+                  setCurrentTime(seekTime);
+                  if (audioRef.current) {
+                    audioRef.current.currentTime = seekTime;
+                  }
+                }}
+              >
+                <div
+                  ref={timelineInnerRef}
+                  className="relative h-full"
+                  style={{
+                    width: timelineContainerWidth * timelineZoom,
+                    minWidth: '100%',
+                  }}
+                >
               {totalDuration > 0 &&
                 segments.map((seg, idx) => {
                 const innerWidth = timelineContainerWidth * timelineZoom;
@@ -1504,7 +1515,8 @@ export default function EditorPage() {
                   }}
                 />
               )}
-            </div>
+                </div>
+              </div>
             <div
               className="relative h-[60px] mt-4 border-t border-[color:var(--garden-border)] pointer-events-auto"
               style={{ display: parkedSegments.length > 0 ? 'block' : 'none' }}
@@ -1641,6 +1653,7 @@ export default function EditorPage() {
               <div className="absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] text-[color:var(--garden-step-muted)] tracking-widest">
                 PARKING TRACK (drag clips here to park • drag up to restore)
               </div>
+            </div>
             </div>
           </div>
         </div>

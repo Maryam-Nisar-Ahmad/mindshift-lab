@@ -4,6 +4,7 @@ load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
 
 import json
 import os
+import re
 from openai import AsyncOpenAI
 
 SPLIT_PROMPT = (
@@ -11,16 +12,49 @@ SPLIT_PROMPT = (
 )
 
 
-async def split_script_to_segments(script_text: str) -> list:
-    client = AsyncOpenAI(api_key=os.getenv('DEEPSEEK_API_KEY'), base_url='https://api.deepseek.com')
-    prompt = SPLIT_PROMPT.format(script_text=script_text)
-    response = await client.chat.completions.create(
-        model=os.getenv('DEEPSEEK_MODEL', 'deepseek-chat'),
-        temperature=0.3,
-        max_tokens=8000,
-        messages=[{'role': 'user', 'content': prompt}],
-    )
-    raw = response.choices[0].message.content.strip()
+def _chunk_script_for_split(script_text: str, max_chars: int) -> list[str]:
+    """
+    Split a long script into chunks that each fit comfortably in one API call
+    (input + output). Uses paragraph boundaries where possible.
+    """
+    script_text = (script_text or '').strip()
+    if not script_text:
+        return []
+    if len(script_text) <= max_chars:
+        return [script_text]
+
+    rough: list[str] = []
+    paras = re.split(r'\n\s*\n+', script_text)
+    cur: list[str] = []
+    cur_len = 0
+
+    for p in paras:
+        p = p.strip()
+        if not p:
+            continue
+        sep = 2 if cur else 0
+        if cur_len + sep + len(p) > max_chars and cur:
+            rough.append('\n\n'.join(cur))
+            cur = [p]
+            cur_len = len(p)
+        else:
+            cur.append(p)
+            cur_len += sep + len(p)
+    if cur:
+        rough.append('\n\n'.join(cur))
+
+    out: list[str] = []
+    for part in rough:
+        if len(part) <= max_chars:
+            out.append(part)
+        else:
+            for i in range(0, len(part), max_chars):
+                out.append(part[i:i + max_chars])
+    return out
+
+
+def _parse_split_response(raw: str) -> list[str]:
+    raw = raw.strip()
     lines = raw.split('\n')
     if lines and lines[0].strip().startswith('```'):
         lines = lines[1:]
@@ -28,3 +62,39 @@ async def split_script_to_segments(script_text: str) -> list:
         lines = lines[:-1]
     raw = '\n'.join(lines)
     return [s.strip() for s in json.loads(raw.strip()) if s.strip()]
+
+
+async def split_script_to_segments(script_text: str) -> list:
+    """
+    Split full script into segments. Long scripts (e.g. 20–30+ min) are processed
+    in multiple API calls so input/output limits never truncate the full segment list.
+    """
+    script_text = (script_text or '').strip()
+    if not script_text:
+        return []
+
+    chunk_limit = max(3000, int(os.getenv('SCRIPT_SPLIT_CHUNK_CHARS', '9000')))
+    # DeepSeek enforces a provider-side max_tokens cap (often 1–8192).
+    # Clamp so the job never crashes and truncates the segment list.
+    max_out_raw = int(os.getenv('DEEPSEEK_SPLIT_MAX_TOKENS', '8192'))
+    max_out = max(1, min(8192, max_out_raw))
+    chunks = _chunk_script_for_split(script_text, chunk_limit)
+
+    client = AsyncOpenAI(api_key=os.getenv('DEEPSEEK_API_KEY'), base_url='https://api.deepseek.com')
+    model = os.getenv('DEEPSEEK_MODEL', 'deepseek-chat')
+
+    all_segments: list[str] = []
+    timeout_s = float(os.getenv('DEEPSEEK_SPLIT_TIMEOUT_SECONDS', '90'))
+    for chunk in chunks:
+        prompt = SPLIT_PROMPT.format(script_text=chunk)
+        response = await client.chat.completions.create(
+            model=model,
+            temperature=0.3,
+            max_tokens=max_out,
+            messages=[{'role': 'user', 'content': prompt}],
+            timeout=timeout_s,
+        )
+        raw = response.choices[0].message.content or ''
+        all_segments.extend(_parse_split_response(raw))
+
+    return all_segments

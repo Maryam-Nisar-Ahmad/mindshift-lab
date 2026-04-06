@@ -330,6 +330,10 @@ def _run_generate_prompts(project_id: str, script_text: str, job_id: str):
         # can be resumed without forcing a fresh prompt run.
         meta["current_step"] = max(meta.get("current_step", 0), 3.5)
         write_meta(project_id, meta)
+    except Exception:
+        import traceback
+        job_status["status"] = "error"
+        job_status["error"] = traceback.format_exc()
     finally:
         loop.close()
 

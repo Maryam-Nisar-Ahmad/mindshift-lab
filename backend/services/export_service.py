@@ -80,6 +80,7 @@ def build_and_export(project_id, project_dir, editor_state, job_status):
             ass_path = None
 
         cmd = ["ffmpeg", "-y"]
+        project_dir_resolved = project_dir.resolve()
         end_padding_seconds = float(editor_state.get("end_padding_seconds", 0.0) or 0.0)
         durations = []
         for idx, seg in enumerate(segments):
@@ -103,10 +104,18 @@ def build_and_export(project_id, project_dir, editor_state, job_status):
                     alt = project_dir / "images" / (Path(seg["image"]).stem + ".PNG")
                     if alt.exists():
                         img_path = alt
-            cmd.extend(["-loop", "1", "-t", str(dur), "-i", str(img_path)])
+            try:
+                in_arg = img_path.resolve().relative_to(project_dir_resolved).as_posix()
+            except ValueError:
+                in_arg = str(img_path.resolve())
+            cmd.extend(["-loop", "1", "-t", str(dur), "-i", in_arg])
 
         audio_path = project_dir / "audio.mp3"
-        cmd.extend(["-i", str(audio_path)])
+        try:
+            audio_in = audio_path.resolve().relative_to(project_dir_resolved).as_posix()
+        except ValueError:
+            audio_in = str(audio_path.resolve())
+        cmd.extend(["-i", audio_in])
         n_images = len(segments)
         audio_idx = n_images
 
@@ -143,10 +152,36 @@ def build_and_export(project_id, project_dir, editor_state, job_status):
             final_video = "[vout]"
 
         filter_complex = ";".join(filter_parts)
-        cmd.extend(["-filter_complex", filter_complex, "-map", final_video, "-map", f"{audio_idx}:a"])
-        cmd.extend([
-            "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p", "-r", "30", "-shortest", str(output_path)
-        ])
+        filter_script_path = project_dir / "_export_filter_complex.txt"
+        filter_script_path.write_text(filter_complex, encoding="utf-8")
+        cmd.extend(
+            [
+                "-filter_complex_script",
+                filter_script_path.name,
+                "-map",
+                final_video,
+                "-map",
+                f"{audio_idx}:a",
+            ]
+        )
+        try:
+            out_arg = output_path.resolve().relative_to(project_dir_resolved).as_posix()
+        except ValueError:
+            out_arg = str(output_path.resolve())
+        cmd.extend(
+            [
+                "-c:v",
+                "libx264",
+                "-c:a",
+                "aac",
+                "-pix_fmt",
+                "yuv420p",
+                "-r",
+                "30",
+                "-shortest",
+                out_arg,
+            ]
+        )
 
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, cwd=str(project_dir))
         stdout, stderr = proc.communicate()

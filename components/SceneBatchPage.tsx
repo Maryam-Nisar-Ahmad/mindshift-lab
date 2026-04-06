@@ -183,8 +183,8 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate }: Sce
               style={
                 copied
                   ? {
-                      borderColor: 'var(--garden-lilac)',
-                      backgroundColor: 'color-mix(in srgb, var(--garden-lilac) 22%, var(--garden-card))',
+                      borderColor: 'var(--fun-bubble)',
+                      backgroundColor: 'color-mix(in srgb, var(--fun-bubble) 38%, var(--garden-card))',
                     }
                   : {
                       borderColor: 'var(--garden-border)',

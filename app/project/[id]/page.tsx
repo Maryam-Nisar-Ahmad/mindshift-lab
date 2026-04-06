@@ -415,9 +415,13 @@ export default function ProjectPage() {
     if (!step3JobId) return;
     const interval = setInterval(() => {
       getJobStatus(step3JobId)
-        .then((s: { status?: string }) => {
+        .then((s: { status?: string; error?: string }) => {
           if (s?.status === 'splitting') setStep3JobStatusText('Analyzing script...');
           else if (s?.status === 'generating') setStep3JobStatusText('Generating prompts...');
+          else if (s?.status === 'error') {
+            setStep3JobStatusText(s?.error ?? 'Prompt generation failed.');
+            setStep3JobId(null);
+          }
           if (s?.status === 'done') {
             if (promptDoneSoundPlayedRef.current !== step3JobId) {
               playPromptDoneSound();
@@ -427,7 +431,11 @@ export default function ProjectPage() {
             if (id) getPrompts(id).then((p: { segment_id: number; segment_text: string; mj_line: string }[]) => setStep3Prompts(Array.isArray(p) ? p : null)).catch(() => {});
           }
         })
-        .catch(() => {});
+        .catch(() => {
+          // Job might disappear after a backend reload; stop waiting.
+          setStep3JobId(null);
+          setStep3JobStatusText('Prompt generation stopped. Click Generate All Prompts again.');
+        });
     }, 2000);
     return () => clearInterval(interval);
   }, [step3JobId, id, playPromptDoneSound]);
@@ -781,8 +789,8 @@ export default function ProjectPage() {
                       <div className="mt-2 flex gap-2">
                         <button
                           type="button"
-                          className="rounded-xl border-2 px-3 py-1.5 text-sm font-medium transition-colors hover:opacity-90"
-                          style={{ borderColor: 'var(--garden-amber)', color: 'var(--garden-text)' }}
+                          className="rounded-xl px-3 py-1.5 text-sm font-medium text-white transition-colors hover:opacity-90"
+                          style={{ backgroundColor: '#ae5fd7' }}
                           onClick={() => {
                             if (!id || !step2Script.trim()) return;
                             cleanScript(id, step2Script)
@@ -831,8 +839,8 @@ export default function ProjectPage() {
                       ) : (
                         <button
                           type="button"
-                          className="mt-4 rounded px-3 py-1.5 text-sm font-medium"
-                          style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
+                          className="mt-4 rounded-xl px-3 py-1.5 text-sm font-medium text-white transition-colors hover:opacity-90"
+                          style={{ backgroundColor: '#ae5fd7' }}
                           onClick={() => {
                             if (!id) return;
                             generatePrompts(id)
