@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --webpack",
+    "dev:unlock": "node -e \"require('fs').rmSync('.next/dev/lock',{force:true}); console.log('Removed .next/dev/lock (ok if file was missing).')\"",
+    "dev": "next dev --webpack -p 3050",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 3050",
     "lint": "eslint"
   },
   "dependencies": {

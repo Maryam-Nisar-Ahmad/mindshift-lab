@@ -1,20 +1,25 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { insertGrokImageSlot } from '@/lib/api';
 
 type PromptItem = {
   segment_id: number;
   segment_text: string;
+  target_image?: string;
   mj_line: string;
 };
 
 type SceneBatchPageProps = {
   prompts: PromptItem[];
   projectId: string;
-  onRegenerate: (segId: number, segText: string) => Promise<{ mj_line: string }>;
+  onRegenerate: (segId: number, segText: string) => Promise<{ mj_line: string; target_image?: string }>;
+  /** Display label for which engine prompts target */
+  promptEngine?: 'midjourney' | 'grok';
 };
 
 const PER_PAGE = 13;
+const PROMPT_BATCH_SIZE = 20;
 const SEQ_KEY = (id: string) => `mindshift_seq_${id}`;
 const COPIED_KEY = (id: string) => `mindshift_copied_${id}`;
 
@@ -54,13 +59,31 @@ function saveCopiedIds(projectId: string, ids: Set<number>) {
   } catch {}
 }
 
-export default function SceneBatchPage({ prompts, projectId, onRegenerate }: SceneBatchPageProps) {
+function intentLine(text: string): string {
+  const clean = (text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return 'No segment summary available.';
+  return clean.length > 120 ? `${clean.slice(0, 117)}...` : clean;
+}
+
+/** Full prompts in document order, separated by a blank line (Grok batch paste/export). */
+function buildAllPromptsPlaintext(items: PromptItem[]): string {
+  return items
+    .map((p) => (p.mj_line || '').trim())
+    .join('\n\n');
+}
+
+export default function SceneBatchPage({ prompts, projectId, onRegenerate, promptEngine = 'midjourney' }: SceneBatchPageProps) {
   const [currentPage, setCurrentPage] = useState(1);
   const [sequenceIndex, setSequenceIndex] = useState(0);
   const [copiedIds, setCopiedIds] = useState<Set<number>>(new Set());
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [regenLoadingId, setRegenLoadingId] = useState<number | null>(null);
   const [localPrompts, setLocalPrompts] = useState<PromptItem[]>([]);
+  const [allPromptsCopied, setAllPromptsCopied] = useState(false);
+  const [nextBatchStart, setNextBatchStart] = useState(0);
+  const [selectedBatchIndex, setSelectedBatchIndex] = useState(0);
+  const [slotInserting, setSlotInserting] = useState<number | null>(null);
+  const [slotFeedback, setSlotFeedback] = useState<string | null>(null);
 
   useEffect(() => {
     setLocalPrompts([...prompts]);
@@ -72,9 +95,16 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate }: Sce
   }, [projectId]);
 
   const total = localPrompts.length;
+  const sortedPrompts = [...localPrompts].sort((a, b) => a.segment_id - b.segment_id);
+  const totalBatches = Math.max(1, Math.ceil(total / PROMPT_BATCH_SIZE));
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
   const start = (currentPage - 1) * PER_PAGE;
   const pageItems = localPrompts.slice(start, start + PER_PAGE);
+
+  useEffect(() => {
+    setNextBatchStart((prev) => (prev < total ? prev : 0));
+    setSelectedBatchIndex((prev) => (prev < totalBatches ? prev : 0));
+  }, [total, totalBatches]);
 
   const handleCopySequence = () => {
     if (total === 0) return;
@@ -119,9 +149,11 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate }: Sce
   const handleRegen = async (seg: PromptItem) => {
     setRegenLoadingId(seg.segment_id);
     try {
-      const { mj_line } = await onRegenerate(seg.segment_id, seg.segment_text);
+      const { mj_line, target_image } = await onRegenerate(seg.segment_id, seg.segment_text);
       setLocalPrompts((prev) =>
-        prev.map((p) => (p.segment_id === seg.segment_id ? { ...p, mj_line } : p))
+        prev.map((p) =>
+          p.segment_id === seg.segment_id ? { ...p, mj_line, target_image: target_image ?? p.target_image } : p
+        )
       );
       setCopiedIds((prev) => {
         const next = new Set(prev);
@@ -134,17 +166,98 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate }: Sce
     }
   };
 
+  const unit = promptEngine === 'grok' ? 'Prompt' : 'Scene';
   const seqLabel =
     sequenceIndex === 0
-      ? 'Copy Scene 1 Prompt'
+      ? `Copy ${unit} 1`
       : sequenceIndex < total
-        ? `Copied — Click for Scene ${sequenceIndex + 1} Prompt`
-        : `All ${total} Prompts Copied`;
+        ? `Copied — Click for ${unit} ${sequenceIndex + 1}`
+        : `All ${total} copied`;
   const seqDone = total > 0 && sequenceIndex >= total;
   const seqMid = total > 0 && sequenceIndex > 0 && sequenceIndex < total;
 
-  return (
-    <div className="space-y-4">
+  const allPromptsText = buildAllPromptsPlaintext(sortedPrompts);
+  const selectedBatchStart = selectedBatchIndex * PROMPT_BATCH_SIZE;
+  const selectedBatchItems = sortedPrompts.slice(selectedBatchStart, selectedBatchStart + PROMPT_BATCH_SIZE);
+  const selectedBatchText = buildAllPromptsPlaintext(selectedBatchItems);
+  const selectedBatchEnd = selectedBatchStart + selectedBatchItems.length;
+  const nextBatchItems = sortedPrompts.slice(nextBatchStart, nextBatchStart + PROMPT_BATCH_SIZE);
+  const nextBatchText = buildAllPromptsPlaintext(nextBatchItems);
+  const nextBatchEnd = nextBatchStart + nextBatchItems.length;
+  const nextBatchDone = nextBatchStart >= total || total === 0;
+
+  const handleCopyAllPrompts = () => {
+    if (!allPromptsText) return;
+    navigator.clipboard.writeText(allPromptsText).then(() => {
+      setAllPromptsCopied(true);
+      window.setTimeout(() => setAllPromptsCopied(false), 2000);
+    });
+  };
+
+  const handleCopyNextBatch = () => {
+    if (!nextBatchText) return;
+    navigator.clipboard.writeText(nextBatchText).then(() => {
+      const next = nextBatchStart + PROMPT_BATCH_SIZE;
+      setNextBatchStart(next);
+      if (next < totalBatches * PROMPT_BATCH_SIZE) {
+        setSelectedBatchIndex(Math.floor(next / PROMPT_BATCH_SIZE));
+      }
+    });
+  };
+
+  const handleDownloadAllPrompts = () => {
+    if (!allPromptsText) return;
+    const blob = new Blob([allPromptsText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `grok-scene-prompts-${projectId}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadSelectedBatch = () => {
+    if (!selectedBatchText) return;
+    const blob = new Blob([selectedBatchText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `grok-scene-prompts-${projectId}-${selectedBatchStart + 1}-${selectedBatchEnd}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleInsertGrokImageSlot = async (segmentId: number) => {
+    const label =
+      segmentId <= 1 ? 'download.jfif' : `download (${segmentId - 1}).jfif`;
+    if (
+      !window.confirm(
+        `Make an empty file slot for Prompt ${segmentId}?\n\nGrok-style files from this position onward in images/ will be renamed +1 (e.g. the old file for this slot → next name) so the missing file can be saved as ${label}.\n\nNumbered stills (1.png, 2.jpg, …) are not moved.`
+      )
+    ) {
+      return;
+    }
+    setSlotInserting(segmentId);
+    setSlotFeedback(null);
+    try {
+      const r = await insertGrokImageSlot(projectId, segmentId);
+      const n = r.renamed?.length ?? 0;
+      if (n === 0) {
+        setSlotFeedback('Nothing to shift: no Grok download–named files on or after that position (or the slot is already after the last file).');
+        return;
+      }
+      setSlotFeedback(
+        `Renamed ${n} file(s). Save the missing still as ${r.save_next_as} (e.g. ${label}).`
+      );
+    } catch (e) {
+      setSlotFeedback(e instanceof Error ? e.message : 'Request failed');
+    } finally {
+      setSlotInserting(null);
+    }
+  };
+
+  const mainColumn = (
+    <>
       <div
         className="rounded-lg border p-3 mb-4 text-sm"
         style={{
@@ -153,9 +266,12 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate }: Sce
           color: 'var(--garden-text)',
         }}
       >
-        Save images as 1.png, 2.png... into:
+        <span className="font-semibold" style={{ color: 'var(--garden-text)' }}>
+          {promptEngine === 'grok' ? 'Grok' : 'Midjourney'}
+        </span>
+        : copy each line into your image tool. Save files in sequence as download.jfif, download (1).jfif, download (2).jfif, … into:
         <br />
-        MindShift-Lab/videos/{projectId}/images/
+        D:/Goal/MindShift-Lab/frontend/videos/{projectId}/images/
       </div>
 
       <button
@@ -198,9 +314,19 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate }: Sce
                   className="rounded text-xs font-medium px-2 py-0.5 shrink-0"
                   style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                 >
-                  Scene {seg.segment_id}
+                  {promptEngine === 'grok' ? 'Prompt' : 'Scene'} {seg.segment_id}
                 </span>
               </div>
+              <p
+                className="text-[11px] mb-2 rounded-md px-2 py-1"
+                style={{
+                  color: 'var(--garden-text)',
+                  backgroundColor: 'color-mix(in srgb, var(--garden-accent) 10%, transparent)',
+                }}
+                title={seg.segment_text}
+              >
+                Target image: {intentLine(seg.target_image || seg.segment_text)}
+              </p>
               <p
                 className={`font-mono text-xs mb-3 ${expanded ? '' : 'line-clamp-2'}`}
                 style={{ color: 'var(--garden-text-soft)' }}
@@ -261,6 +387,136 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate }: Sce
           Next
         </button>
       </div>
+    </>
+  );
+
+  return (
+    <div className="space-y-4">
+      {promptEngine === 'grok' && total > 0 ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-[color-mix(in_srgb,var(--garden-accent)_12%,transparent)] disabled:opacity-50"
+            style={{ borderColor: 'var(--garden-accent)', color: 'var(--garden-accent)' }}
+            onClick={handleCopyNextBatch}
+            disabled={nextBatchDone}
+          >
+            {nextBatchStart === 0
+              ? `Copy first ${Math.min(PROMPT_BATCH_SIZE, total)} prompts`
+              : nextBatchStart < total
+                ? `Copy next ${Math.min(PROMPT_BATCH_SIZE, total - nextBatchStart)} prompts`
+                : 'All prompt batches copied'}
+          </button>
+          <button
+            type="button"
+            className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-[color-mix(in_srgb,var(--garden-accent)_12%,transparent)]"
+            style={{ borderColor: 'var(--garden-accent)', color: 'var(--garden-accent)' }}
+            onClick={handleCopyAllPrompts}
+            disabled={!allPromptsText}
+          >
+            {allPromptsCopied ? 'Copied all prompts' : 'Copy all prompts'}
+          </button>
+          <button
+            type="button"
+            className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-[color-mix(in_srgb,var(--garden-accent)_12%,transparent)]"
+            style={{ borderColor: 'var(--garden-border)', color: 'var(--garden-text-soft)' }}
+            onClick={handleDownloadAllPrompts}
+            disabled={!allPromptsText}
+          >
+            Export all .txt
+          </button>
+          <select
+            className="rounded-lg border px-3 py-2 text-sm"
+            style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-card)', color: 'var(--garden-text)' }}
+            value={selectedBatchIndex}
+            onChange={(e) => setSelectedBatchIndex(Number(e.target.value))}
+          >
+            {Array.from({ length: totalBatches }).map((_, idx) => {
+              const startIdx = idx * PROMPT_BATCH_SIZE + 1;
+              const endIdx = Math.min((idx + 1) * PROMPT_BATCH_SIZE, total);
+              return (
+                <option key={idx} value={idx}>
+                  Batch {idx + 1}: prompts {startIdx}-{endIdx}
+                </option>
+              );
+            })}
+          </select>
+          <button
+            type="button"
+            className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-[color-mix(in_srgb,var(--garden-accent)_12%,transparent)] disabled:opacity-50"
+            style={{ borderColor: 'var(--garden-border)', color: 'var(--garden-text-soft)' }}
+            onClick={() => navigator.clipboard.writeText(selectedBatchText)}
+            disabled={!selectedBatchText}
+          >
+            Copy selected batch ({selectedBatchItems.length})
+          </button>
+          <button
+            type="button"
+            className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-[color-mix(in_srgb,var(--garden-accent)_12%,transparent)] disabled:opacity-50"
+            style={{ borderColor: 'var(--garden-border)', color: 'var(--garden-text-soft)' }}
+            onClick={handleDownloadSelectedBatch}
+            disabled={!selectedBatchText}
+          >
+            Export selected batch .txt
+          </button>
+          <span className="text-xs" style={{ color: 'var(--garden-text-soft)' }}>
+            One full prompt per block, blank line between (scene order). Next batch now covers prompts {nextBatchStart + 1}-{Math.min(nextBatchEnd, total)}.
+          </span>
+        </div>
+      ) : null}
+
+      {promptEngine === 'grok' && total > 0 ? (
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+          <div className="min-w-0 flex-1 space-y-4">{mainColumn}</div>
+          <aside
+            className="w-full shrink-0 rounded-lg border p-3 lg:sticky lg:top-4 lg:max-w-[16rem]"
+            style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-card)' }}
+          >
+            <p className="text-xs font-semibold mb-1" style={{ color: 'var(--garden-text)' }}>
+              Fix skipped download
+            </p>
+            <p className="text-[11px] leading-snug mb-2" style={{ color: 'var(--garden-text-soft)' }}>
+              Click a prompt # if the extension skipped that still. Grok-named files in images/ at that slot and
+              after shift by one filename so you can add the missing file with the right name. Numbered 1.png… files
+              are not touched.
+            </p>
+            <div className="mb-2 grid max-h-64 grid-cols-5 gap-1.5 overflow-y-auto">
+              {sortedPrompts.map((p) => (
+                <button
+                  key={p.segment_id}
+                  type="button"
+                  disabled={slotInserting !== null}
+                  onClick={() => void handleInsertGrokImageSlot(p.segment_id)}
+                  className="rounded border px-1.5 py-1 text-center text-xs font-medium disabled:opacity-50"
+                  style={{
+                    borderColor: 'var(--garden-accent)',
+                    color: 'var(--garden-accent)',
+                    backgroundColor:
+                      slotInserting === p.segment_id
+                        ? 'color-mix(in srgb, var(--garden-accent) 20%, var(--garden-card))'
+                        : 'var(--garden-card)',
+                  }}
+                >
+                  {p.segment_id}
+                </button>
+              ))}
+            </div>
+            {slotFeedback ? (
+              <p
+                className="text-[11px] break-words rounded-md px-2 py-1"
+                style={{
+                  color: 'var(--garden-text)',
+                  backgroundColor: 'color-mix(in srgb, var(--garden-accent) 8%, transparent)',
+                }}
+              >
+                {slotFeedback}
+              </p>
+            ) : null}
+          </aside>
+        </div>
+      ) : (
+        <div className="space-y-4">{mainColumn}</div>
+      )}
     </div>
   );
 }

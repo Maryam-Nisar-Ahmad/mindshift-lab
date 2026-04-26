@@ -2,7 +2,26 @@ fastapi
 uvicorn[standard]
 python-multipart
 openai>=1.59.0
+# Thumbnail prompts (step 4): OPENAI_API_KEY + THUMBNAIL_PROMPT_PROVIDER=openai (default when key set).
+# OPENAI_THUMBNAIL_MODEL=gpt-4o · OPENAI_THUMBNAIL_MAX_TOKENS=8192 · THUMBNAIL_PROMPT_TEMPERATURE=0.35
 python-dotenv
 rapidfuzz
 aiofiles
 pydub
+pytest
+faster-whisper>=1.0.0
+
+# Transcription: default is local & free (faster-whisper). OPENAI_API_KEY is NOT required.
+# Optional paid cloud ASR: set TRANSCRIPTION_BACKEND=openai and OPENAI_API_KEY.
+# Env: TRANSCRIPTION_BACKEND=local|openai · FASTER_WHISPER_MODEL=base|small|medium · WHISPER_LOCAL_DEVICE=cpu|cuda
+
+# Optional: WhisperX forced alignment (works on CPU; GPU is optional and faster)
+#   CPU-only (no NVIDIA GPU):
+#     pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+#     pip install whisperx
+#   GPU (CUDA 12.1):
+#     pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+#     pip install whisperx
+# Demucs (vocal stem before align, slow on CPU): pip install demucs
+#   Demucs auto-uses CPU when no GPU; override with DEMUCS_DEVICE=cpu|cuda|auto
+# Env: WHISPERX_DEVICE=auto|cpu|cuda (default auto = CPU if no GPU)

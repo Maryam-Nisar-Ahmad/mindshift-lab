@@ -1,6 +1,7 @@
 import { encodeProjectIdForPath as pid } from '@/lib/projectId';
 
-export const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API =
+  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8050";
 
 export async function listProjects() {
   const res = await fetch(`${API}/api/projects`);
@@ -9,11 +10,11 @@ export async function listProjects() {
   return data;
 }
 
-export async function createProject(title: string) {
+export async function createProject(title: string, image_provider: 'midjourney' | 'grok' = 'midjourney') {
   const res = await fetch(`${API}/api/projects`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify({ title, image_provider }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
@@ -32,6 +33,35 @@ export async function deleteProject(id: string, confirm_title: string) {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ confirm_title }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
+  return data;
+}
+
+export async function patchImageProvider(id: string, image_provider: 'midjourney' | 'grok') {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/image-provider`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image_provider }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
+  return data;
+}
+
+export type PipelineSettingsPayload = {
+  whisperx_align?: boolean;
+  demucs_vocals?: boolean;
+  subtitle_max_cps?: number;
+};
+
+/** Automations from research.md: WhisperX alignment, Demucs for music-heavy audio, subtitle CPS target. */
+export async function patchPipelineSettings(id: string, body: PipelineSettingsPayload) {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/pipeline-settings`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
   const data = await res.json();
   if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
@@ -141,6 +171,25 @@ export async function checkImages(id: string) {
   return data;
 }
 
+/** Shift Grok download–named files in images/ to free a slot for a missing scene. */
+export async function insertGrokImageSlot(
+  id: string,
+  segment_id: number
+): Promise<{
+  segment_id: number;
+  save_next_as: string;
+  renamed: { from: string; to: string }[];
+}> {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/images/insert-grok-slot`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ segment_id }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
+  return data;
+}
+
 export async function uploadAudio(id: string, file: File) {
   const form = new FormData();
   form.append("file", file);
@@ -176,9 +225,23 @@ export async function getSegments(id: string) {
   return data;
 }
 
+const NO_STORE_INIT: RequestInit = {
+  cache: 'no-store',
+  headers: {
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+  },
+};
+
 export async function generateSubtitles(id: string) {
   const res = await fetch(`${API}/api/projects/${pid(id)}/generate-subtitles`, {
-    method: "POST",
+    method: 'POST',
+    ...NO_STORE_INIT,
+    headers: {
+      ...NO_STORE_INIT.headers,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({}),
   });
   const data = await res.json();
   if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
@@ -187,8 +250,12 @@ export async function generateSubtitles(id: string) {
 
 export async function saveEditorState(id: string, state: unknown) {
   const res = await fetch(`${API}/api/projects/${pid(id)}/editor-state`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    method: 'PUT',
+    ...NO_STORE_INIT,
+    headers: {
+      ...NO_STORE_INIT.headers,
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify(state),
   });
   const data = await res.json();
@@ -197,7 +264,10 @@ export async function saveEditorState(id: string, state: unknown) {
 }
 
 export async function getEditorState(id: string) {
-  const res = await fetch(`${API}/api/projects/${pid(id)}/editor-state`);
+  const res = await fetch(
+    `${API}/api/projects/${pid(id)}/editor-state?_=${Date.now()}`,
+    NO_STORE_INIT
+  );
   const data = await res.json();
   if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
   return data;
@@ -232,12 +302,23 @@ export type SeoDataPayload = {
   tags: string;
   seo_title: string;
   cleaned_script?: string;
+  /** CTR title from DeepSeek (step 8) — see deepseek-title-system-prompt.md */
+  deepseek_video_title?: string;
+  deepseek_title_raw?: string;
 };
 
 export async function getSeoData(id: string): Promise<SeoDataPayload> {
   const res = await fetch(`${API}/api/projects/${pid(id)}/seo-data`);
   if (!res.ok)
-    return { description: '', chapter_timestamps: '', tags: '', seo_title: '', cleaned_script: '' };
+    return {
+      description: '',
+      chapter_timestamps: '',
+      tags: '',
+      seo_title: '',
+      cleaned_script: '',
+      deepseek_video_title: '',
+      deepseek_title_raw: '',
+    };
   return res.json();
 }
 
@@ -247,4 +328,42 @@ export async function saveSeoData(id: string, data: SeoDataPayload): Promise<voi
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
+}
+
+export type ThumbnailPromptVariant = {
+  variant: number;
+  title: string;
+  grok_prompt: string;
+};
+
+export async function generateThumbnailPrompts(id: string): Promise<{ prompts: ThumbnailPromptVariant[] }> {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/thumbnail-prompts/generate`, {
+    method: 'POST',
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
+  return data;
+}
+
+export async function getThumbnailPrompts(id: string): Promise<ThumbnailPromptVariant[]> {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/thumbnail-prompts`);
+  const data = await res.json();
+  if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
+  return data;
+}
+
+/** DeepSeek CTR title — uses script.txt + deepseek-title-system-prompt.md */
+export async function generateVideoTitle(id: string): Promise<{ final_title: string; raw?: string }> {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/generate-video-title`, { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
+  return data;
+}
+
+/** Combined Grok scene DeepSeek system prompt (prompts/grok_scene_system.txt + grok_style_spec_v1.txt). */
+export async function getGrokImageSystemPrompt(): Promise<{ content: string }> {
+  const res = await fetch(`${API}/api/prompts/grok-image-system`);
+  const data = await res.json();
+  if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
+  return data;
 }

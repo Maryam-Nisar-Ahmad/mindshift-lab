@@ -15,6 +15,7 @@ export default function Page() {
   const [modalOpen, setModalOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [title, setTitle] = useState('');
+  const [imageProvider, setImageProvider] = useState<'midjourney' | 'grok'>('grok');
   const [projects, setProjects] = useState<Project[]>([]);
 
   useEffect(() => {
@@ -32,7 +33,7 @@ export default function Page() {
     const t = title.trim();
     if (!t) return;
     try {
-      const result = await createProject(t);
+      const result = await createProject(t, imageProvider);
       setModalOpen(false);
       setTitle('');
       router.push('/project/' + encodeProjectIdForRoute(result.id));
@@ -101,13 +102,40 @@ export default function Page() {
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Title"
-              className="mb-4 w-full rounded-xl border-2 px-3 py-2 outline-none focus:ring-2 focus:ring-[var(--garden-accent)]"
+              className="mb-3 w-full rounded-xl border-2 px-3 py-2 outline-none focus:ring-2 focus:ring-[var(--garden-accent)]"
               style={{
                 borderColor: 'var(--garden-border-strong)',
                 backgroundColor: 'var(--garden-input)',
                 color: 'var(--garden-text)',
               }}
             />
+            <fieldset className="mb-4 text-left">
+              <legend className="text-xs font-semibold mb-2" style={{ color: 'var(--garden-text-soft)' }}>
+                Scene images &mdash; prompt style
+              </legend>
+              <label className="flex items-center gap-2 mb-1 cursor-pointer">
+                <input
+                  type="radio"
+                  name="imgprov"
+                  checked={imageProvider === 'grok'}
+                  onChange={() => setImageProvider('grok')}
+                />
+                <span className="text-sm" style={{ color: 'var(--garden-text)' }}>
+                  Grok (detailed text prompts &mdash; paste into Grok image)
+                </span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="imgprov"
+                  checked={imageProvider === 'midjourney'}
+                  onChange={() => setImageProvider('midjourney')}
+                />
+                <span className="text-sm" style={{ color: 'var(--garden-text)' }}>
+                  Midjourney (&mdash;sref / params at end of line)
+                </span>
+              </label>
+            </fieldset>
             <div className="flex gap-2">
               <button
                 type="button"

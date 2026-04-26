@@ -8,6 +8,22 @@ import os
 from openai import AsyncOpenAI
 from .segment_service import split_script_to_segments
 
+
+def _repo_prompts_dir() -> Path:
+    return Path(__file__).resolve().parent.parent.parent / "prompts"
+
+
+def _load_grok_system_prompt() -> str:
+    p = _repo_prompts_dir()
+    scene = (p / "grok_scene_system.txt").read_text(encoding="utf-8") if (p / "grok_scene_system.txt").is_file() else ""
+    style = (p / "grok_style_spec_v1.txt").read_text(encoding="utf-8") if (p / "grok_style_spec_v1.txt").is_file() else ""
+    if not scene and not style:
+        return ""
+    if not scene:
+        return style.strip()
+    return f"{scene}\n\n---\n{style}".strip()
+
+
 SREF = '--sref https://REDACTED https://REDACTED https://REDACTED https://REDACTED'
 # --cref removed: MJ7 follows text descriptions precisely enough without it,
 # and it was locking all characters into the same static reference pose.
@@ -364,6 +380,8 @@ No commentary. No explanation. No notes. Nothing outside this format.
 The MIDJOURNEY_PROMPT is the full prompt text only (no sref/cref/style tail).
 """.strip()
 
+GROK_SYSTEM_COMBINED = _load_grok_system_prompt() or SYSTEM_PROMPT
+
 
 def _strip_mj_params(text):
     # Strip --sref and all URLs following it
@@ -412,14 +430,17 @@ def _parse_response_blocks_by_segment_number(raw: str) -> dict[int, str]:
     return blocks
 
 
-def _extract_fields_from_block(block: str) -> tuple[str, str, str, str]:
+def _extract_fields_from_block(block: str) -> tuple[str, str, str, str, str]:
     scene_type_re = re.compile(r'SCENE\s+TYPE:\s*(.+)', re.IGNORECASE)
     character_re = re.compile(r'CHARACTER:\s*(.+)', re.IGNORECASE)
     act_re = re.compile(r'ACT:\s*(\d+)', re.IGNORECASE)
+    target_re = re.compile(r'TARGET_IMAGE:\s*(.+)', re.IGNORECASE)
     mj_re = re.compile(r'MIDJOURNEY_PROMPT:\s*(.*)', re.IGNORECASE | re.DOTALL)
+    grok_re = re.compile(r'GROK_IMAGE_PROMPT:\s*(.*)', re.IGNORECASE | re.DOTALL)
     scene_type = ''
     character = ''
     act = ''
+    target_image = ''
     prompt_text = ''
     for line in block.split('\n'):
         m = scene_type_re.match(line.strip())
@@ -431,7 +452,13 @@ def _extract_fields_from_block(block: str) -> tuple[str, str, str, str]:
         m = act_re.match(line.strip())
         if m:
             act = m.group(1).strip()
+        m = target_re.match(line.strip())
+        if m:
+            target_image = m.group(1).strip()
         m = mj_re.match(line.strip())
+        if m:
+            prompt_text = m.group(1).strip()
+        m = grok_re.match(line.strip())
         if m:
             prompt_text = m.group(1).strip()
     if not prompt_text:
@@ -439,7 +466,17 @@ def _extract_fields_from_block(block: str) -> tuple[str, str, str, str]:
             if 'MIDJOURNEY_PROMPT:' in line:
                 prompt_text = line.split('MIDJOURNEY_PROMPT:', 1)[-1].strip()
                 break
-    return scene_type, character, act, prompt_text
+    if not prompt_text:
+        for line in block.split('\n'):
+            if 'GROK_IMAGE_PROMPT:' in line:
+                prompt_text = line.split('GROK_IMAGE_PROMPT:', 1)[-1].strip()
+                break
+    if not target_image:
+        for line in block.split('\n'):
+            if 'TARGET_IMAGE:' in line:
+                target_image = line.split('TARGET_IMAGE:', 1)[-1].strip()
+                break
+    return scene_type, character, act, target_image, prompt_text
 
 
 def _pack_segment_batches(segments: list[str], max_chars: int) -> list[tuple[int, int]]:
@@ -472,12 +509,42 @@ def _pack_segment_batches(segments: list[str], max_chars: int) -> list[tuple[int
     return batches
 
 
-async def _mj_fetch_parsed_batch(client, model, segments, lo: int, hi: int) -> dict[int, str]:
+async def _mj_fetch_parsed_batch(
+    client,
+    model,
+    segments,
+    lo: int,
+    hi: int,
+    *,
+    system_prompt: str,
+    is_grok: bool,
+) -> dict[int, str]:
     batch = segments[lo:hi]
-    lines = [
-        'Generate one MidJourney prompt for each narration segment below.\n',
-        'In your output, use SEGMENT [N]: headers where N matches the number in each --- SEGMENT N --- line below.\n',
-    ]
+    if is_grok:
+        total_n = len(segments)
+        batch_lo = lo + 1
+        batch_hi = hi
+        pct_lo = round(100 * lo / total_n) if total_n else 0
+        pct_hi = round(100 * (hi - 1) / total_n) if total_n and hi > lo else 0
+        lines = [
+            f'VIDEO CONTEXT: This narration has {total_n} segments total. This request covers SEGMENTS {batch_lo}-{batch_hi} '
+            f'(approximately {pct_lo}-{pct_hi}% through the runtime by segment order).\n',
+            'Retention rules: each image must CONGRUENTLY illustrate THAT segment’s words (no mismatched “vibe” imagery). '
+            'Within this batch, vary shot scale so you never output three consecutive identical types '
+            '(wide-establishing vs medium vs close-up vs abstract/symbol). Honor ACT mood from STYLE SPEC.\n',
+            'Generate one detailed self-contained image prompt for Grok for each narration segment below.\n',
+            'Use SEGMENT [N]: headers; each block must include GROK_IMAGE_PROMPT as one flowing paragraph (no URLs, no CLI flags, no scene numbers in the prompt text).\n',
+            'Also include TARGET_IMAGE: one concise single-line visual intent (8-18 words) describing exactly what best-match image should show.\n',
+            'Brand-critical: every prompt must lock the same MindShift Lab on-screen identity as the Style Spec — thin outline 2D anime with soft cel-shading, muted sets with clear character color reads, act-matched lighting (cool clinical / warm golden). Not generic anime wallpaper; not photoreal; not 3D game render.\n',
+            'Rich specifics in one paragraph: foreground action; midground context; background depth; 3+ props with named materials; ONE motivated light (direction + color temperature); shot scale; [CHARACTER_A]/[CHARACTER_B] anchor phrases verbatim when they appear; mandatory FINAL LINE from the Style Spec at the end.\n',
+            'In your output, use SEGMENT [N]: headers where N matches the number in each --- SEGMENT N --- line below.\n',
+        ]
+    else:
+        lines = [
+            'Generate one MidJourney prompt for each narration segment below.\n',
+            'Also include TARGET_IMAGE: one concise single-line visual intent (8-18 words) describing the exact best-match frame.\n',
+            'In your output, use SEGMENT [N]: headers where N matches the number in each --- SEGMENT N --- line below.\n',
+        ]
     for i, seg in enumerate(batch):
         global_idx = lo + i + 1
         lines.append(f'--- SEGMENT {global_idx} ---')
@@ -494,7 +561,7 @@ async def _mj_fetch_parsed_batch(client, model, segments, lo: int, hi: int) -> d
         temperature=1.0,
         max_tokens=max_out,
         messages=[
-            {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': user_message},
         ],
         timeout=timeout_s,
@@ -510,52 +577,90 @@ async def _mj_fetch_parsed_batch(client, model, segments, lo: int, hi: int) -> d
     return parsed
 
 
-def _rows_from_parsed_batch(segments: list[str], lo: int, hi: int, parsed: dict[int, str]) -> list[dict]:
+def _rows_from_parsed_batch(
+    segments: list[str],
+    lo: int,
+    hi: int,
+    parsed: dict[int, str],
+    *,
+    image_provider: str,
+) -> list[dict]:
     rows: list[dict] = []
+    use_grok = (image_provider or "midjourney").lower() == "grok"
     for i in range(lo, hi):
         segment_id = i + 1
         segment_text = segments[i]
         block = parsed.get(segment_id, '')
-        scene_type, character, act, prompt_text = _extract_fields_from_block(block)
+        scene_type, character, act, target_image, prompt_text = _extract_fields_from_block(block)
+        mj_line = (
+            _build_grok_line(prompt_text, segment_id)
+            if use_grok
+            else _build_mj_line(prompt_text, character, segment_id)
+        )
         rows.append({
             'segment_id': segment_id,
             'segment_text': segment_text,
             'scene_type': scene_type,
             'character': character,
             'act': act,
+            'target_image': target_image or segment_text,
             'prompt_text': prompt_text,
-            'mj_line': _build_mj_line(prompt_text, character, segment_id),
+            'mj_line': mj_line,
+            'image_provider': 'grok' if use_grok else 'midjourney',
         })
     return rows
 
 
-async def _mj_prompt_range(client, model, segments: list[str], lo: int, hi: int, *, allow_retry_single: bool) -> list[dict]:
+async def _mj_prompt_range(
+    client,
+    model,
+    segments: list[str],
+    lo: int,
+    hi: int,
+    *,
+    allow_retry_single: bool,
+    image_provider: str,
+) -> list[dict]:
     """One or more API calls covering [lo, hi). Splits recursively if output truncates."""
+    is_grok = (image_provider or "midjourney").lower() == "grok"
+    system_prompt = GROK_SYSTEM_COMBINED if is_grok else SYSTEM_PROMPT
     if lo >= hi:
         return []
     try:
-        parsed = await _mj_fetch_parsed_batch(client, model, segments, lo, hi)
+        parsed = await _mj_fetch_parsed_batch(
+            client, model, segments, lo, hi, system_prompt=system_prompt, is_grok=is_grok
+        )
     except Exception:
         # If a batch call is slow/fails, split and continue so one request never stalls the whole job.
         if hi - lo > 1:
             mid = lo + (hi - lo) // 2
-            left = await _mj_prompt_range(client, model, segments, lo, mid, allow_retry_single=True)
-            right = await _mj_prompt_range(client, model, segments, mid, hi, allow_retry_single=True)
+            left = await _mj_prompt_range(
+                client, model, segments, lo, mid, allow_retry_single=True, image_provider=image_provider
+            )
+            right = await _mj_prompt_range(
+                client, model, segments, mid, hi, allow_retry_single=True, image_provider=image_provider
+            )
             return left + right
         raise
-    rows = _rows_from_parsed_batch(segments, lo, hi, parsed)
+    rows = _rows_from_parsed_batch(segments, lo, hi, parsed, image_provider=image_provider)
     if all((r.get('prompt_text') or '').strip() for r in rows):
         return rows
 
     if hi - lo > 1:
         mid = lo + (hi - lo) // 2
-        left = await _mj_prompt_range(client, model, segments, lo, mid, allow_retry_single=True)
-        right = await _mj_prompt_range(client, model, segments, mid, hi, allow_retry_single=True)
+        left = await _mj_prompt_range(
+            client, model, segments, lo, mid, allow_retry_single=True, image_provider=image_provider
+        )
+        right = await _mj_prompt_range(
+            client, model, segments, mid, hi, allow_retry_single=True, image_provider=image_provider
+        )
         return left + right
 
     if allow_retry_single:
-        parsed2 = await _mj_fetch_parsed_batch(client, model, segments, lo, hi)
-        rows2 = _rows_from_parsed_batch(segments, lo, hi, parsed2)
+        parsed2 = await _mj_fetch_parsed_batch(
+            client, model, segments, lo, hi, system_prompt=system_prompt, is_grok=is_grok
+        )
+        rows2 = _rows_from_parsed_batch(segments, lo, hi, parsed2, image_provider=image_provider)
         if any((r.get('prompt_text') or '').strip() for r in rows2):
             return rows2
 
@@ -571,7 +676,18 @@ def _build_mj_line(prompt_text, character, segment_id):
     return re.sub(r'  +', ' ', ' '.join(parts))
 
 
-async def generate_mj_prompts(project_id, script_text, job_status):
+def _build_grok_line(prompt_text, _segment_id):
+    """Single text block for Grok — prompt only (no scene id suffix; users paste into Grok as-is)."""
+    t = (prompt_text or "").strip()
+    if not t:
+        return t
+    t = re.sub(r"\s+", " ", t)
+    # Strip legacy suffix if the model echoed it
+    t = re.sub(r"\s*\[scene\s*\d+\]\s*$", "", t, flags=re.IGNORECASE).strip()
+    return t
+
+
+async def generate_mj_prompts(project_id, script_text, job_status, image_provider: str = "midjourney"):
     job_status['status'] = 'splitting'
     job_status['percent'] = 0
     segments = await split_script_to_segments(script_text)
@@ -597,7 +713,9 @@ async def generate_mj_prompts(project_id, script_text, job_status):
         packed = _pack_segment_batches(segments, max_user_chars)
     done = 0
     for lo, hi in packed:
-        part = await _mj_prompt_range(client, model, segments, lo, hi, allow_retry_single=True)
+        part = await _mj_prompt_range(
+            client, model, segments, lo, hi, allow_retry_single=True, image_provider=image_provider
+        )
         results.extend(part)
         done += hi - lo
         job_status['percent'] = 10 + int(85 * done / max(n, 1))
@@ -607,42 +725,69 @@ async def generate_mj_prompts(project_id, script_text, job_status):
     return results
 
 
-async def regenerate_single_prompt(segment_text, segment_id):
+async def regenerate_single_prompt(segment_text, segment_id, image_provider: str = "midjourney"):
+    is_grok = (image_provider or "midjourney").lower() == "grok"
+    system_prompt = GROK_SYSTEM_COMBINED if is_grok else SYSTEM_PROMPT
     client = AsyncOpenAI(api_key=os.getenv('DEEPSEEK_API_KEY'), base_url='https://api.deepseek.com')
-    user_message = f'--- SEGMENT {segment_id} ---\n\n{segment_text}'
+    if is_grok:
+        user_message = (
+            "VIDEO CONTEXT: Single-segment regeneration. Illustrate THIS segment’s words with full congruency; "
+            "pick shot scale (wide/medium/close/abstract) appropriate to the beat and STYLE SPEC ACT.\n\n"
+            f"--- SEGMENT {segment_id} ---\n\n{segment_text}"
+        )
+    else:
+        user_message = f'--- SEGMENT {segment_id} ---\n\n{segment_text}'
     response = await client.chat.completions.create(
         model=os.getenv('DEEPSEEK_REASONER_MODEL', 'deepseek-reasoner'),
         temperature=1.0,
         max_tokens=4000,
         messages=[
-            {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': user_message},
         ],
     )
     raw = response.choices[0].message.content or ''
-    character_re = re.compile(r'CHARACTER:\s*(.+)', re.IGNORECASE)
-    act_re = re.compile(r'ACT:\s*(\d+)', re.IGNORECASE)
-    mj_re = re.compile(r'MIDJOURNEY_PROMPT:\s*(.*)', re.IGNORECASE | re.DOTALL)
-    character = ''
-    act = ''
-    prompt_text = ''
-    for line in raw.split('\n'):
-        m = character_re.match(line.strip())
-        if m:
-            character = m.group(1).strip()
-        m = act_re.match(line.strip())
-        if m:
-            act = m.group(1).strip()
-        m = mj_re.match(line.strip())
-        if m:
-            prompt_text = m.group(1).strip()
-    if not prompt_text and 'MIDJOURNEY_PROMPT:' in raw:
-        prompt_text = raw.split('MIDJOURNEY_PROMPT:', 1)[-1].strip()
+    scene_type, character, act, target_image, prompt_text = _extract_fields_from_block(raw)
+    if not prompt_text:
+        character_re = re.compile(r'CHARACTER:\s*(.+)', re.IGNORECASE)
+        target_re = re.compile(r'TARGET_IMAGE:\s*(.+)', re.IGNORECASE)
+        mj_re = re.compile(r'MIDJOURNEY_PROMPT:\s*(.*)', re.IGNORECASE | re.DOTALL)
+        grok_re = re.compile(r'GROK_IMAGE_PROMPT:\s*(.*)', re.IGNORECASE | re.DOTALL)
+        character = ''
+        for line in raw.split('\n'):
+            m = character_re.match(line.strip())
+            if m:
+                character = m.group(1).strip()
+            m = target_re.match(line.strip())
+            if m:
+                target_image = m.group(1).strip()
+            m = mj_re.match(line.strip())
+            if m:
+                prompt_text = m.group(1).strip()
+            m = grok_re.match(line.strip())
+            if m:
+                prompt_text = m.group(1).strip()
+        if not prompt_text and 'MIDJOURNEY_PROMPT:' in raw:
+            prompt_text = raw.split('MIDJOURNEY_PROMPT:', 1)[-1].strip()
+        if not prompt_text and 'GROK_IMAGE_PROMPT:' in raw:
+            prompt_text = raw.split('GROK_IMAGE_PROMPT:', 1)[-1].strip()
+    mj_line = (
+        _build_grok_line(prompt_text, segment_id)
+        if is_grok
+        else _build_mj_line(prompt_text, character, segment_id)
+    )
     return {
         'segment_id': segment_id,
         'segment_text': segment_text,
         'character': character,
         'act': act,
+        'target_image': target_image or segment_text,
         'prompt_text': prompt_text,
-        'mj_line': _build_mj_line(prompt_text, character, segment_id),
+        'mj_line': mj_line,
+        'image_provider': 'grok' if is_grok else 'midjourney',
     }
+
+
+def get_grok_image_system_prompt_combined() -> str:
+    """Full DeepSeek system text for whole-script Grok image prompts (scene + style spec)."""
+    return _load_grok_system_prompt()

@@ -14,14 +14,15 @@ SYSTEM_CLEAN = (
 
 
 async def clean_script(script: str) -> str:
-    # Same stack as segment/audio correction: DeepSeek when configured; OpenAI fallback.
+    """Uses DeepSeek only (no OpenAI billing)."""
     deepseek_key = os.getenv('DEEPSEEK_API_KEY')
-    if deepseek_key:
-        client = AsyncOpenAI(api_key=deepseek_key, base_url='https://api.deepseek.com')
-        model = os.getenv('DEEPSEEK_MODEL', 'deepseek-chat')
-    else:
-        client = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        model = 'gpt-4o'
+    if not deepseek_key:
+        raise RuntimeError(
+            'DEEPSEEK_API_KEY is required for script cleaning. '
+            'Set it in backend/.env (same key as the rest of the DeepSeek pipeline).'
+        )
+    client = AsyncOpenAI(api_key=deepseek_key, base_url='https://api.deepseek.com')
+    model = os.getenv('DEEPSEEK_MODEL', 'deepseek-chat')
     response = await client.chat.completions.create(
         model=model,
         temperature=0,

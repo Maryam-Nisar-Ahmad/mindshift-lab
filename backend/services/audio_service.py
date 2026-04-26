@@ -3,11 +3,14 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
 
 import json
+import logging
 import os
 import re
 import math
 from pathlib import Path
 from openai import OpenAI
+
+logger = logging.getLogger(__name__)
 
 MAX_CHUNK_MB = 24
 DEEPSEEK_BATCH = 300
@@ -57,7 +60,8 @@ def _split_audio(audio_path: Path, base_dir: Path) -> list:
     return chunks
 
 
-def _transcribe_chunk(client: OpenAI, audio_path: str, offset: float = 0.0) -> dict:
+def _transcribe_chunk_openai(client: OpenAI, audio_path: str, offset: float = 0.0) -> dict:
+    """Cloud transcription (paid OpenAI API). Opt-in via TRANSCRIPTION_BACKEND=openai."""
     with open(audio_path, "rb") as f:
         resp = client.audio.transcriptions.create(
             model="whisper-1",
@@ -91,6 +95,13 @@ def _transcribe_chunk(client: OpenAI, audio_path: str, offset: float = 0.0) -> d
         "segments": segments,
         "words": words,
     }
+
+
+def _transcribe_chunk_local(audio_path: str, offset: float = 0.0) -> dict:
+    """Free local Whisper (faster-whisper). Default pipeline."""
+    from .local_transcription import transcribe_file_local
+
+    return transcribe_file_local(audio_path, offset_sec=offset)
 
 
 def _merge_chunks(results: list) -> dict:
@@ -205,23 +216,74 @@ Return only the numbered corrected words. No explanations. No extra text."""
     return corrected_data
 
 
-async def process_audio(project_id, project_dir: Path, job_status: dict) -> None:
+async def process_audio(project_id, project_dir: Path, job_status: dict, job_id: str | None = None) -> None:
+    from .job_store import job_put
+
+    def persist_job() -> None:
+        if job_id:
+            job_put(job_id, dict(job_status))
+
     audio_path = project_dir / "audio.mp3"
     script_path = project_dir / "script.txt"
 
     job_status["status"] = "transcribing"
     job_status["percent"] = 10
+    persist_job()
 
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     chunks = _split_audio(audio_path, project_dir)
 
-    results = [_transcribe_chunk(client, path, offset) for path, offset in chunks]
+    backend = os.getenv("TRANSCRIPTION_BACKEND", "local").strip().lower()
+    if backend in ("openai", "cloud", "api"):
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "TRANSCRIPTION_BACKEND=openai requires OPENAI_API_KEY. "
+                "Remove TRANSCRIPTION_BACKEND or set it to 'local' for free on-device transcription."
+            )
+        client = OpenAI(api_key=api_key)
+        results = [_transcribe_chunk_openai(client, path, offset) for path, offset in chunks]
+    else:
+        try:
+            results = [_transcribe_chunk_local(path, offset) for path, offset in chunks]
+        except ImportError as e:
+            raise RuntimeError(
+                "Local transcription requires faster-whisper. Install: pip install faster-whisper"
+            ) from e
 
     for path, _ in chunks:
         if "_chunk_" in path and os.path.exists(path):
             os.remove(path)
 
     data = _merge_chunks(results)
+
+    meta: dict = {}
+    meta_path = project_dir / "meta.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            meta = {}
+
+    from .forced_alignment import (
+        alignment_requested,
+        apply_whisperx_alignment,
+        demucs_requested,
+    )
+
+    if alignment_requested(meta):
+        job_status["status"] = "aligning"
+        job_status["percent"] = 28
+        persist_job()
+        try:
+            data = apply_whisperx_alignment(
+                data,
+                audio_path,
+                use_demucs=demucs_requested(meta),
+            )
+        except Exception:
+            logger.exception("Alignment step crashed; continuing with Whisper timestamps.")
+        job_status["percent"] = 48
+        persist_job()
 
     with open(project_dir / "audio_transcript.json", "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -230,12 +292,22 @@ async def process_audio(project_id, project_dir: Path, job_status: dict) -> None
 
     job_status["percent"] = 55
     job_status["status"] = "correcting"
+    persist_job()
 
+    pre_deepseek = data
     if script_path.exists():
         script_text = script_path.read_text(encoding="utf-8").strip()
         corrected = _correct_with_deepseek(data, script_text)
     else:
         corrected = data
+
+    from .word_timing import refine_word_timestamps
+
+    if corrected.get("words"):
+        corrected["words"] = refine_word_timestamps(corrected["words"])
+        corrected["text"] = " ".join(w["word"] for w in corrected["words"])
+        if corrected["words"]:
+            corrected["duration"] = corrected["words"][-1]["end"]
 
     with open(project_dir / "audio_corrected.json", "w", encoding="utf-8") as f:
         json.dump(corrected, f, indent=2, ensure_ascii=False)
@@ -243,12 +315,15 @@ async def process_audio(project_id, project_dir: Path, job_status: dict) -> None
     _save_srt(corrected, project_dir / "audio_corrected.srt")
 
     words_corrected = sum(
-        1 for o, c in zip(data["words"], corrected["words"])
+        1 for o, c in zip(pre_deepseek["words"], corrected["words"])
         if o["word"].lower() != c["word"].lower()
     )
 
     job_status["status"] = "done"
     job_status["percent"] = 100
-    job_status["duration"] = data["duration"]
-    job_status["word_count"] = len(data["words"])
+    final_dur = float(corrected.get("duration") or pre_deepseek.get("duration") or 0)
+    job_status["duration"] = final_dur
+    job_status["duration_sec"] = final_dur
+    job_status["word_count"] = len(corrected.get("words") or [])
     job_status["words_corrected"] = words_corrected
+    persist_job()

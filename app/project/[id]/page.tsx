@@ -2,13 +2,22 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getProject, resetStep, deleteProject, getPromptTemplate, updateTitle, stepComplete, cleanScript, saveScript, getPrompts, generatePrompts, getJobStatus, checkImages, regeneratePrompt, fileUrl, uploadAudio, getAudioStatus, assembleSegments, getSeoData, saveSeoData, type SeoDataPayload } from '@/lib/api';
+import { getProject, resetStep, deleteProject, getPromptTemplate, updateTitle, stepComplete, cleanScript, saveScript, getPrompts, generatePrompts, getJobStatus, checkImages, regeneratePrompt, fileUrl, uploadAudio, getAudioStatus, assembleSegments, getSeoData, saveSeoData, patchImageProvider, patchPipelineSettings, generateThumbnailPrompts, getThumbnailPrompts, generateVideoTitle, getGrokImageSystemPrompt, type SeoDataPayload, type ThumbnailPromptVariant } from '@/lib/api';
 import { projectIdFromParams, encodeProjectIdForRoute } from '@/lib/projectId';
 import useToast from '@/hooks/useToast';
 import Toast from '@/components/Toast';
 import SceneBatchPage from '@/components/SceneBatchPage';
 
-type Project = { id: string; title: string; current_step?: number; mtime?: number };
+type Project = {
+  id: string;
+  title: string;
+  current_step?: number;
+  mtime?: number;
+  image_provider?: string;
+  whisperx_align?: boolean;
+  demucs_vocals?: boolean;
+  subtitle_max_cps?: number;
+};
 type ProjectWithReviewMeta = Project & { exportedVideoPath?: string; videoUrl?: string };
 
 const STEPS = [
@@ -167,18 +176,23 @@ export default function ProjectPage() {
   const [step2Script, setStep2Script] = useState('');
   const [step1Copied, setStep1Copied] = useState(false);
   const [step2Copied, setStep2Copied] = useState(false);
-  const [step3Prompts, setStep3Prompts] = useState<{ segment_id: number; segment_text: string; mj_line: string }[] | null>(null);
+  const [step3Prompts, setStep3Prompts] = useState<{ segment_id: number; segment_text: string; target_image?: string; mj_line: string }[] | null>(null);
   const [step3JobId, setStep3JobId] = useState<string | null>(null);
   const [step3JobStatusText, setStep3JobStatusText] = useState('');
   const [imageCheckResult, setImageCheckResult] = useState<{ present: string[]; missing: string[]; total_expected: number } | null>(null);
+  const [thumbPrompts, setThumbPrompts] = useState<ThumbnailPromptVariant[] | null>(null);
+  const [thumbGenLoading, setThumbGenLoading] = useState(false);
   const [step4Template, setStep4Template] = useState<string | null>(null);
   const [step4CustomInput, setStep4CustomInput] = useState<string>('');
   const [step4Copied, setStep4Copied] = useState(false);
   const [step4_5Script, setStep4_5Script] = useState<string>('');
   const [step4_5Copied, setStep4_5Copied] = useState(false);
-  const [step5Status, setStep5Status] = useState<'idle' | 'transcribing' | 'correcting' | 'done' | 'error'>('idle');
+  const [step5Status, setStep5Status] = useState<'idle' | 'transcribing' | 'aligning' | 'correcting' | 'done' | 'error'>('idle');
+  const [pipelineWhisperx, setPipelineWhisperx] = useState(false);
+  const [pipelineDemucs, setPipelineDemucs] = useState(false);
   const [step5Result, setStep5Result] = useState<{ duration_sec?: number; word_count?: number; words_corrected?: number } | null>(null);
   const [step5Error, setStep5Error] = useState<string | null>(null);
+  const [assembleBusy, setAssembleBusy] = useState(false);
   const [step7Combined, setStep7Combined] = useState<string>('');
   const [step7Copied, setStep7Copied] = useState(false);
   const [thumbnailReviewPrompt, setThumbnailReviewPrompt] = useState('');
@@ -186,6 +200,11 @@ export default function ProjectPage() {
   const [seoChapterTimestamps, setSeoChapterTimestamps] = useState('');
   const [seoTags, setSeoTags] = useState('');
   const [seoTitleField, setSeoTitleField] = useState('');
+  const [deepseekVideoTitle, setDeepseekVideoTitle] = useState('');
+  const [deepseekTitleRaw, setDeepseekTitleRaw] = useState('');
+  const [titleGenLoading, setTitleGenLoading] = useState(false);
+  const [grokSystemText, setGrokSystemText] = useState<string | null>(null);
+  const [grokSystemLoading, setGrokSystemLoading] = useState(false);
   const [step8CopiedField, setStep8CopiedField] = useState<string | null>(null);
   const step8CopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [everActiveSteps, setEverActiveSteps] = useState<Record<string, boolean>>({});
@@ -237,6 +256,12 @@ export default function ProjectPage() {
     });
   }, [fetchProject]);
 
+  useEffect(() => {
+    if (!project) return;
+    setPipelineWhisperx(!!project.whisperx_align);
+    setPipelineDemucs(!!project.demucs_vocals);
+  }, [project]);
+
   const currentStep = typeof project?.current_step === 'number' ? project.current_step : Number(project?.current_step ?? 0);
   const displayStep = viewingStep ?? currentStep;
   const heroStepIndex = STEPS.findIndex((s) => s.num === currentStep);
@@ -278,7 +303,7 @@ export default function ProjectPage() {
   useEffect(() => {
     if (id && displayStep >= 3) {
       getPrompts(id)
-        .then((p: { segment_id: number; segment_text: string; mj_line: string }[]) => setStep3Prompts(Array.isArray(p) ? p : null))
+        .then((p: { segment_id: number; segment_text: string; target_image?: string; mj_line: string }[]) => setStep3Prompts(Array.isArray(p) ? p : null))
         .catch((err) => {
           setStep3Prompts(null);
           showToast(err instanceof Error ? err.message : 'Request failed', 'error');
@@ -316,6 +341,12 @@ export default function ProjectPage() {
       void ctx.close().catch(() => {});
     }, 900);
   }, []);
+  useEffect(() => {
+    if (!id || displayStep !== 4) return;
+    getThumbnailPrompts(id)
+      .then((p) => setThumbPrompts(Array.isArray(p) && p.length > 0 ? p : null))
+      .catch(() => setThumbPrompts(null));
+  }, [id, displayStep]);
   useEffect(() => {
     if (id && displayStep === 4) {
       Promise.all([
@@ -363,6 +394,8 @@ export default function ProjectPage() {
         setSeoChapterTimestamps(data.chapter_timestamps ?? '');
         setSeoTags(data.tags ?? '');
         setSeoTitleField(data.seo_title ?? '');
+        setDeepseekVideoTitle(data.deepseek_video_title ?? '');
+        setDeepseekTitleRaw(data.deepseek_title_raw ?? '');
       })
       .catch(() => {});
   }, [id, displayStep]);
@@ -395,14 +428,16 @@ export default function ProjectPage() {
     getAudioStatus(id)
       .then((s: { status?: string; duration_sec?: number; word_count?: number; words_corrected?: number; error?: string }) => {
         if (s?.status === 'transcribing') setStep5Status('transcribing');
+        else if (s?.status === 'aligning') setStep5Status('aligning');
         else if (s?.status === 'correcting') setStep5Status('correcting');
         else if (s?.status === 'done') {
           setStep5Status('done');
           setStep5Result({ duration_sec: s.duration_sec, word_count: s.word_count, words_corrected: s.words_corrected });
           setStep5Error(null);
-        } else if (s?.status === 'error') {
+        }         else if (s?.status === 'error') {
           setStep5Status('error');
           setStep5Error(s?.error ?? 'Processing failed');
+          setStep5Result(null);
         } else {
           setStep5Status('idle');
           setStep5Result(null);
@@ -428,7 +463,8 @@ export default function ProjectPage() {
               promptDoneSoundPlayedRef.current = step3JobId;
             }
             setStep3JobId(null);
-            if (id) getPrompts(id).then((p: { segment_id: number; segment_text: string; mj_line: string }[]) => setStep3Prompts(Array.isArray(p) ? p : null)).catch(() => {});
+            if (id) getPrompts(id).then((p: { segment_id: number; segment_text: string; target_image?: string; mj_line: string }[]) => setStep3Prompts(Array.isArray(p) ? p : null)).catch(() => {});
+            fetchProject();
           }
         })
         .catch(() => {
@@ -438,13 +474,14 @@ export default function ProjectPage() {
         });
     }, 2000);
     return () => clearInterval(interval);
-  }, [step3JobId, id, playPromptDoneSound]);
+  }, [step3JobId, id, playPromptDoneSound, fetchProject]);
   useEffect(() => {
-    if (!id || (step5Status !== 'transcribing' && step5Status !== 'correcting')) return;
+    if (!id || (step5Status !== 'transcribing' && step5Status !== 'aligning' && step5Status !== 'correcting')) return;
     const interval = setInterval(() => {
       getAudioStatus(id)
         .then((s: { status?: string; duration_sec?: number; word_count?: number; words_corrected?: number; error?: string }) => {
           if (s?.status === 'transcribing') setStep5Status('transcribing');
+          else if (s?.status === 'aligning') setStep5Status('aligning');
           else if (s?.status === 'correcting') setStep5Status('correcting');
           else if (s?.status === 'done') {
             setStep5Status('done');
@@ -452,6 +489,7 @@ export default function ProjectPage() {
           } else if (s?.status === 'error') {
             setStep5Status('error');
             setStep5Error(s?.error ?? 'Processing failed');
+            setStep5Result(null);
           }
         })
         .catch(() => {});
@@ -471,6 +509,7 @@ export default function ProjectPage() {
         getAudioStatus(id)
           .then((s: { status?: string; duration_sec?: number; word_count?: number; words_corrected?: number; error?: string }) => {
             if (s?.status === 'transcribing') setStep5Status('transcribing');
+            else if (s?.status === 'aligning') setStep5Status('aligning');
             else if (s?.status === 'correcting') setStep5Status('correcting');
             else if (s?.status === 'done') {
               setStep5Status('done');
@@ -669,6 +708,56 @@ export default function ProjectPage() {
           </p>
         </div>
 
+        <div
+          className="mb-6 rounded-2xl border-2 p-4 flex flex-wrap gap-4 items-center justify-between"
+          style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-card)' }}
+        >
+          <div>
+            <p className="text-sm font-semibold" style={{ color: 'var(--garden-text)' }}>
+              Scene image engine
+            </p>
+            <p className="text-xs mt-1" style={{ color: 'var(--garden-text-soft)' }}>
+              Used when generating or regenerating scene prompts (step 3).
+            </p>
+          </div>
+          <div className="flex gap-4 items-center flex-wrap">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="imgeng-main"
+                checked={(project.image_provider ?? 'midjourney') === 'grok'}
+                onChange={() => {
+                  if (!id) return;
+                  patchImageProvider(id, 'grok')
+                    .then(() => {
+                      fetchProject();
+                      showToast('Prompts will use Grok-style detailed text', 'success');
+                    })
+                    .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'));
+                }}
+              />
+              Grok
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="imgeng-main"
+                checked={(project.image_provider ?? 'midjourney') === 'midjourney'}
+                onChange={() => {
+                  if (!id) return;
+                  patchImageProvider(id, 'midjourney')
+                    .then(() => {
+                      fetchProject();
+                      showToast('Prompts will use Midjourney line format', 'success');
+                    })
+                    .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'));
+                }}
+              />
+              Midjourney
+            </label>
+          </div>
+        </div>
+
         {STEPS.map(({ num, name }) => {
           const complete = currentStep > num;
           const active = viewingStep === num || (viewingStep == null && currentStep === num);
@@ -684,7 +773,9 @@ export default function ProjectPage() {
               className={`fun-step-card p-5 mb-4 ${active ? 'fun-step-card-active' : ''}`}
               style={{
                 backgroundImage: `linear-gradient(145deg, var(--garden-card) 0%, color-mix(in srgb, ${stripe} 16%, var(--garden-card)) 100%)`,
-                border: active ? '2px solid var(--garden-accent)' : '2px solid color-mix(in srgb, var(--garden-border) 55%, transparent)',
+                borderStyle: 'solid',
+                borderWidth: 2,
+                borderColor: active ? 'var(--garden-accent)' : 'color-mix(in srgb, var(--garden-border) 55%, transparent)',
                 borderLeft: `5px solid ${stripe}`,
               }}
             >
@@ -819,6 +910,48 @@ export default function ProjectPage() {
                   )}
                   {num === 3 && (
                     <>
+                      <div
+                        className="mt-2 mb-4 rounded-xl border p-3 text-sm"
+                        style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-card)' }}
+                      >
+                        <button
+                          type="button"
+                          className="font-semibold underline-offset-2 hover:underline"
+                          style={{ color: 'var(--garden-accent)' }}
+                          disabled={grokSystemLoading}
+                          onClick={() => {
+                            if (grokSystemText) {
+                              setGrokSystemText(null);
+                              return;
+                            }
+                            setGrokSystemLoading(true);
+                            getGrokImageSystemPrompt()
+                              .then((r: { content?: string }) => {
+                                setGrokSystemText(r?.content ?? '');
+                              })
+                              .catch((err) => showToast(err instanceof Error ? err.message : 'Failed to load', 'error'))
+                              .finally(() => setGrokSystemLoading(false));
+                          }}
+                        >
+                          {grokSystemLoading
+                            ? 'Loading…'
+                            : grokSystemText
+                              ? 'Hide DeepSeek system prompt (Grok scenes)'
+                              : 'Show DeepSeek system prompt (Grok scenes — whole script)'}
+                        </button>
+                        <p className="mt-1 text-xs" style={{ color: 'var(--garden-text-soft)' }}>
+                          Combined from <code className="text-[11px]">prompts/grok_scene_system.txt</code> +{' '}
+                          <code className="text-[11px]">prompts/grok_style_spec_v1.txt</code>. MidJourney uses a different system prompt in code.
+                        </p>
+                        {grokSystemText ? (
+                          <pre
+                            className="mt-2 max-h-72 overflow-y-auto rounded-lg p-3 text-xs whitespace-pre-wrap font-mono"
+                            style={{ backgroundColor: 'var(--garden-surface)', color: 'var(--garden-text-soft)' }}
+                          >
+                            {grokSystemText}
+                          </pre>
+                        ) : null}
+                      </div>
                       {step3JobId ? (
                         <div className="mt-4 flex items-center gap-2" style={{ color: 'var(--garden-text-soft)' }}>
                           <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[color:var(--garden-accent)] border-t-transparent" />
@@ -829,10 +962,11 @@ export default function ProjectPage() {
                           <SceneBatchPage
                             prompts={step3Prompts}
                             projectId={id}
+                            promptEngine={(project.image_provider ?? 'midjourney') === 'grok' ? 'grok' : 'midjourney'}
                             onRegenerate={async (segId, segText) => {
                               const r = await regeneratePrompt(id, String(segId), segText);
-                              if (id) getPrompts(id).then((p: { segment_id: number; segment_text: string; mj_line: string }[]) => setStep3Prompts(Array.isArray(p) ? p : null));
-                              return r as { mj_line: string };
+                              if (id) getPrompts(id).then((p: { segment_id: number; segment_text: string; target_image?: string; mj_line: string }[]) => setStep3Prompts(Array.isArray(p) ? p : null));
+                              return r as { mj_line: string; target_image?: string };
                             }}
                           />
                         </div>
@@ -861,7 +995,8 @@ export default function ProjectPage() {
                   {num === 3.5 && (
                     <>
                       <p className="mt-4 text-sm" style={{ color: 'var(--garden-text-soft)' }}>
-                        Save images as 1.png 2.png... into images/ folder.
+                        Save stills into images/ as <code className="text-[11px]">download.jfif</code>,{' '}
+                        <code className="text-[11px]">download (1).jfif</code>, <code className="text-[11px]">download (2).jfif</code>, etc.
                       </p>
                       <button
                         type="button"
@@ -945,6 +1080,75 @@ export default function ProjectPage() {
                         placeholder="e.g. add specific instructions..."
                         className="garden-input-field mt-3 w-full rounded-xl px-3 py-2 placeholder:opacity-50"
                       />
+
+                      <div
+                        className="mt-6 rounded-xl border-2 p-4"
+                        style={{
+                          borderColor: 'var(--garden-blue)',
+                          backgroundColor: 'color-mix(in srgb, var(--garden-blue) 10%, var(--garden-card))',
+                        }}
+                      >
+                        <p className="text-sm font-semibold mb-1" style={{ color: 'var(--garden-text)' }}>
+                          Three YouTube thumbnail prompts (for Grok image)
+                        </p>
+                        <p className="text-xs mb-3 leading-relaxed" style={{ color: 'var(--garden-text-soft)' }}>
+                          OpenAI (default) or DeepSeek generates prompts from{' '}
+                          <code className="text-[11px]">thumbnail-system-prompt.md</code> (CTR assembly — not in-video illustration style). Paste each prompt into Grok. For CTR tests see YouTube Studio → Test &amp; Compare.
+                        </p>
+                        <button
+                          type="button"
+                          className="rounded-xl px-3 py-2 text-sm font-semibold mb-3 disabled:opacity-50"
+                          style={{ backgroundColor: 'var(--garden-blue)', color: 'var(--garden-cream)' }}
+                          disabled={thumbGenLoading || !id}
+                          onClick={() => {
+                            if (!id) return;
+                            setThumbGenLoading(true);
+                            generateThumbnailPrompts(id)
+                              .then((r) => {
+                                setThumbPrompts(r.prompts);
+                                showToast('Thumbnail prompts ready', 'success');
+                              })
+                              .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'))
+                              .finally(() => setThumbGenLoading(false));
+                          }}
+                        >
+                          {thumbGenLoading ? 'Generating…' : 'Generate 3 thumbnail prompts'}
+                        </button>
+                        {thumbPrompts && thumbPrompts.length > 0 && (
+                          <div className="space-y-4">
+                            {thumbPrompts.map((tp) => (
+                              <div
+                                key={tp.variant}
+                                className="rounded-lg border p-3"
+                                style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-surface)' }}
+                              >
+                                <div className="flex justify-between items-start gap-2 mb-2">
+                                  <span className="text-xs font-bold" style={{ color: 'var(--garden-accent)' }}>
+                                    Variant {tp.variant}: {tp.title}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="text-xs px-2 py-1 rounded"
+                                    style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text)' }}
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(tp.grok_prompt).then(
+                                        () => showToast('Copied', 'success'),
+                                        () => showToast('Copy failed', 'error')
+                                      );
+                                    }}
+                                  >
+                                    Copy prompt
+                                  </button>
+                                </div>
+                                <p className="font-mono text-xs whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--garden-text-soft)' }}>
+                                  {tp.grok_prompt}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
                       <button
                         type="button"
                         className="mt-3 rounded px-3 py-1.5 text-sm font-medium"
@@ -1019,7 +1223,7 @@ export default function ProjectPage() {
                       <p className="mt-4" style={{ color: 'var(--garden-text-soft)' }}>
                         Save your audio file here:
                       </p>
-                      <p className="mt-1 font-mono text-sm" style={{ color: 'var(--garden-accent)' }}>MindShift-Lab/videos/{id}/audio.mp3</p>
+                      <p className="mt-1 font-mono text-sm" style={{ color: 'var(--garden-accent)' }}>D:/Goal/MindShift-Lab/frontend/videos/{id}/audio.mp3</p>
                       <button
                         type="button"
                         className="mt-3 rounded px-3 py-1.5 text-sm font-medium"
@@ -1038,6 +1242,55 @@ export default function ProjectPage() {
                   )}
                   {num === 5 && (
                     <>
+                      <div
+                        className="mt-4 rounded-xl border-2 p-4 text-left"
+                        style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-card)' }}
+                      >
+                        <p className="text-sm font-semibold mb-1" style={{ color: 'var(--garden-text)' }}>
+                          Automation (recommended)
+                        </p>
+                        <p className="text-xs mb-3 leading-relaxed" style={{ color: 'var(--garden-text-soft)' }}>
+                          Tighter word timing with WhisperX (GPU server) and optional Demucs for background music — see{' '}
+                          <code className="text-[11px]">research.md</code> in the repo. Install backend extras:{' '}
+                          <code className="text-[11px]">whisperx</code>, PyTorch, and optionally <code className="text-[11px]">demucs</code>.
+                        </p>
+                        <label className="flex items-start gap-2 cursor-pointer text-sm mb-2" style={{ color: 'var(--garden-text)' }}>
+                          <input
+                            type="checkbox"
+                            className="mt-1"
+                            checked={pipelineWhisperx}
+                            onChange={(e) => {
+                              const v = e.target.checked;
+                              setPipelineWhisperx(v);
+                              if (!id) return;
+                              patchPipelineSettings(id, { whisperx_align: v })
+                                .then(() => fetchProject())
+                                .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'));
+                            }}
+                          />
+                          <span>
+                            <strong>WhisperX alignment</strong> — phoneme-level timing after Whisper (best on clean voiceover; CPU slow)
+                          </span>
+                        </label>
+                        <label className="flex items-start gap-2 cursor-pointer text-sm" style={{ color: 'var(--garden-text)' }}>
+                          <input
+                            type="checkbox"
+                            className="mt-1"
+                            checked={pipelineDemucs}
+                            onChange={(e) => {
+                              const v = e.target.checked;
+                              setPipelineDemucs(v);
+                              if (!id) return;
+                              patchPipelineSettings(id, { demucs_vocals: v })
+                                .then(() => fetchProject())
+                                .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'));
+                            }}
+                          />
+                          <span>
+                            <strong>Demucs vocals first</strong> — isolate voice before alignment (use if music under narration)
+                          </span>
+                        </label>
+                      </div>
                       <div
                         className="mt-4 rounded-xl p-8 text-center border-2 border-dashed"
                         style={{ backgroundColor: 'var(--garden-timeline)', borderColor: 'var(--garden-border)' }}
@@ -1059,10 +1312,22 @@ export default function ProjectPage() {
                             e.target.value = '';
                           }}
                         />
-                        {step5Status === 'idle' && (
+                        {step5Status === 'error' && (
+                          <div
+                            className="mb-4 rounded-xl border-2 p-4 text-left text-sm"
+                            style={{
+                              backgroundColor: 'var(--garden-danger-soft)',
+                              borderColor: 'var(--garden-danger)',
+                              color: 'var(--garden-text)',
+                            }}
+                          >
+                            {step5Error ?? 'Error'}
+                          </div>
+                        )}
+                        {(step5Status === 'idle' || step5Status === 'error') && (
                           <label
                             htmlFor="step5-file"
-                            className="cursor-pointer hover:opacity-80"
+                            className="cursor-pointer hover:opacity-80 block"
                             style={{ color: 'var(--garden-text-soft)' }}
                           >
                             Drop .mp3 here or click to browse
@@ -1072,6 +1337,12 @@ export default function ProjectPage() {
                           <div className="flex items-center justify-center gap-2" style={{ color: 'var(--garden-text-soft)' }}>
                             <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
                             transcribing
+                          </div>
+                        )}
+                        {step5Status === 'aligning' && (
+                          <div className="flex items-center justify-center gap-2" style={{ color: 'var(--garden-text-soft)' }}>
+                            <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                            refining word timings (WhisperX)…
                           </div>
                         )}
                         {step5Status === 'correcting' && (
@@ -1093,28 +1364,31 @@ export default function ProjectPage() {
                             </p>
                             <button
                               type="button"
-                              className="mt-3 rounded px-3 py-1.5 text-sm font-medium"
+                              disabled={assembleBusy}
+                              className="mt-3 rounded px-3 py-1.5 text-sm font-medium disabled:opacity-60"
                               style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                               onClick={() => {
+                                if (!id || assembleBusy) return;
+                                setAssembleBusy(true);
                                 assembleSegments(id)
-                                  .then(() => router.push('/project/' + encodeProjectIdForRoute(id) + '/editor'))
-                                  .catch((err) => showToast(err instanceof Error ? err.message : 'Assembly failed', 'error'));
+                                  .then(() => {
+                                    // Timeline is built server-side here; reset UI before navigation so wait time
+                                    // isn’t confused with Next.js compiling the editor route (dev) or subtitle API.
+                                    setAssembleBusy(false);
+                                    router.push('/project/' + encodeProjectIdForRoute(id) + '/editor');
+                                  })
+                                  .catch((err) => {
+                                    showToast(err instanceof Error ? err.message : 'Assembly failed', 'error');
+                                    setAssembleBusy(false);
+                                  });
                               }}
                             >
-                              Proceed to Assembly
+                              {assembleBusy ? 'Building timeline…' : 'Proceed to Assembly'}
                             </button>
-                          </div>
-                        )}
-                        {step5Status === 'error' && (
-                          <div
-                            className="rounded-xl border-2 p-4 text-left text-sm"
-                            style={{
-                              backgroundColor: 'var(--garden-danger-soft)',
-                              borderColor: 'var(--garden-danger)',
-                              color: 'var(--garden-text)',
-                            }}
-                          >
-                            {step5Error ?? 'Error'}
+                            <p className="mt-2 text-xs leading-snug" style={{ color: 'var(--garden-text-soft)' }}>
+                              Timeline build is usually a few seconds. WhisperX ran during audio processing above — not during
+                              this click. If the editor feels slow next, Next.js dev mode may be compiling that page the first time.
+                            </p>
                           </div>
                         )}
                       </div>
@@ -1215,6 +1489,8 @@ export default function ProjectPage() {
                               tags: seoTags,
                               seo_title: seoTitleField,
                               cleaned_script: '',
+                              deepseek_video_title: deepseekVideoTitle,
+                              deepseek_title_raw: deepseekTitleRaw,
                             };
                             saveSeoData(id, payload)
                               .then(() => stepComplete(id, 7))
@@ -1237,6 +1513,61 @@ export default function ProjectPage() {
                         <h3 className="text-lg font-semibold" style={{ color: 'var(--garden-text)' }}>
                           Final Review
                         </h3>
+
+                        <div
+                          className="rounded-xl border p-4"
+                          style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-card)' }}
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
+                            <div>
+                              <label className="garden-label-soft block text-sm mb-1">Suggested video title (DeepSeek)</label>
+                              <p className="text-xs" style={{ color: 'var(--garden-text-soft)' }}>
+                                Generated from <code className="text-[11px]">videos/…/script.txt</code> via{' '}
+                                <code className="text-[11px]">deepseek-title-system-prompt.md</code> (Self-Help Title Mastery playbook). Compare with project title below.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              className="rounded-lg px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+                              style={{ backgroundColor: 'var(--garden-blue)', color: 'var(--garden-cream)' }}
+                              disabled={titleGenLoading || !id}
+                              onClick={() => {
+                                if (!id) return;
+                                setTitleGenLoading(true);
+                                generateVideoTitle(id)
+                                  .then((r: { final_title?: string; raw?: string }) => {
+                                    setDeepseekVideoTitle(r?.final_title ?? '');
+                                    setDeepseekTitleRaw(r?.raw ?? '');
+                                    showToast('Title generated', 'success');
+                                  })
+                                  .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'))
+                                  .finally(() => setTitleGenLoading(false));
+                              }}
+                            >
+                              {titleGenLoading ? 'Generating…' : deepseekVideoTitle ? 'Regenerate' : 'Generate title'}
+                            </button>
+                          </div>
+                          <pre
+                            className="garden-pre p-3 rounded whitespace-pre-wrap text-sm min-h-[2.5rem]"
+                            style={{ color: 'var(--garden-text)' }}
+                          >
+                            {deepseekVideoTitle || '—'}
+                          </pre>
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              type="button"
+                              className="rounded border px-2 py-1 text-xs"
+                              style={{ borderColor: 'var(--garden-border)', color: 'var(--garden-text-soft)' }}
+                              onClick={() => {
+                                if (!deepseekVideoTitle) return;
+                                navigator.clipboard.writeText(deepseekVideoTitle);
+                                showToast('Copied', 'success');
+                              }}
+                            >
+                              Copy suggested title
+                            </button>
+                          </div>
+                        </div>
 
                         <div>
                           <label className="garden-label-soft block text-sm mb-1">Video Title</label>
@@ -1328,6 +1659,8 @@ export default function ProjectPage() {
                               tags: seoTags,
                               seo_title: seoTitleField,
                               cleaned_script: '',
+                              deepseek_video_title: deepseekVideoTitle,
+                              deepseek_title_raw: deepseekTitleRaw,
                             };
                             saveSeoData(id, payload)
                               .then(() => stepComplete(id, 8))

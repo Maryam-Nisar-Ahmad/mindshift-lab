@@ -1,9 +1,10 @@
 'use client';
 
 import { useParams, useRouter } from 'next/navigation';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { getProject, getSegments, getEditorState, saveEditorState, fileUrl, generateSubtitles, exportVideo, getJobStatus, stepComplete } from '@/lib/api';
 import { projectIdFromParams, encodeProjectIdForRoute, encodeProjectIdForPath } from '@/lib/projectId';
+import { snapSubtitleLines } from '@/lib/subtitleTiming';
 import useToast from '@/hooks/useToast';
 import Toast from '@/components/Toast';
 
@@ -37,6 +38,8 @@ type SubtitleSettings = {
   highlight_color: string;
   highlight_enabled: boolean;
   outline_width: number;
+  /** Whole-track A/V sync fix (ms); subtracted from playhead when matching subtitle cues (export uses top-level key). */
+  subtitle_offset_ms: number;
 };
 
 type Project = { id: string; title: string };
@@ -70,6 +73,25 @@ function timelineSnapThresholdSec(totalDuration: number): number {
   return Math.min(Math.max(fromFraction, 0.022), 0.065);
 }
 
+/** Matches ffmpeg export: 1920×1080, letterbox (scale with decrease + pad). */
+const EXPORT_W = 1920;
+const EXPORT_H = 1080;
+
+function letterboxRect(
+  iw: number,
+  ih: number,
+  cw: number,
+  ch: number
+): { dx: number; dy: number; dw: number; dh: number } {
+  if (!iw || !ih) return { dx: 0, dy: 0, dw: cw, dh: ch };
+  const scale = Math.min(cw / iw, ch / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  const dx = (cw - dw) / 2;
+  const dy = (ch - dh) / 2;
+  return { dx, dy, dw, dh };
+}
+
 const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
   font_size: 48,
   position: 'bottom',
@@ -78,6 +100,7 @@ const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
   highlight_color: '#FFFF00',
   highlight_enabled: true,
   outline_width: 4,
+  subtitle_offset_ms: 0,
 };
 
 export default function EditorPage() {
@@ -103,6 +126,7 @@ export default function EditorPage() {
   const [exportStatus, setExportStatus] = useState<string>('');
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportDone, setExportDone] = useState(false);
+  const [exportSubtitleQcWarnings, setExportSubtitleQcWarnings] = useState<string[] | null>(null);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [subtitlesPanelOpen, setSubtitlesPanelOpen] = useState(true);
   const [transitionsPanelOpen, setTransitionsPanelOpen] = useState(true);
@@ -113,13 +137,11 @@ export default function EditorPage() {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number | null>(null);
-  const lastTimeRef = useRef<number>(0);
   const currentTimeRef = useRef<number>(0);
+  const autoSubtitlesInitRef = useRef(false);
   const timelineInnerRef = useRef<HTMLDivElement>(null);
   const timelineOuterRef = useRef<HTMLDivElement>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const editorStateRef = useRef({ segments, subtitles, transitions, subtitleSettings });
-  editorStateRef.current = { segments, subtitles, transitions, subtitleSettings };
   const dragRef = useRef<{ startX: number; startStart: number; startEnd: number; segmentId: number; side: 'left' | 'right' } | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
@@ -129,6 +151,94 @@ export default function EditorPage() {
   const [movingSegmentId, setMovingSegmentId] = useState<number | null>(null);
   const [isSnapping, setIsSnapping] = useState(false);
   const [parkedSegments, setParkedSegments] = useState<Segment[]>([]);
+  /** Full snapshot for PUT /editor-state (must match what we load & export or keys get stuck on disk). */
+  const persistStateRef = useRef({
+    segments,
+    parkedSegments,
+    subtitles,
+    transitions,
+    subtitleSettings,
+    has_subtitles: hasSubtitles,
+    font_size: subtitleSettings.font_size,
+    alignment: subtitleSettings.position,
+    subtitle_offset_ms: subtitleSettings.subtitle_offset_ms ?? 0,
+    totalDuration,
+    end_padding_seconds: 1.5,
+    canvas_display_width: 1920 as number,
+  });
+  persistStateRef.current = {
+    segments,
+    parkedSegments,
+    subtitles,
+    transitions,
+    subtitleSettings,
+    has_subtitles: hasSubtitles,
+    font_size: subtitleSettings.font_size,
+    alignment: subtitleSettings.position,
+    subtitle_offset_ms: subtitleSettings.subtitle_offset_ms ?? 0,
+    totalDuration,
+    end_padding_seconds: 1.5,
+    canvas_display_width: canvasRef.current?.offsetWidth ?? 1920,
+  };
+
+  const [subtitleGenPending, setSubtitleGenPending] = useState(false);
+  const subtitleGenLockRef = useRef(false);
+  const hasSubtitlesRef = useRef(hasSubtitles);
+  const subtitlesListRef = useRef<SubtitleLine[]>(subtitles);
+  hasSubtitlesRef.current = hasSubtitles;
+  subtitlesListRef.current = subtitles;
+
+  const buildPersistPayload = useCallback(
+    (overrideSubtitles: SubtitleLine[], overrideHasSubtitles: boolean) => ({
+      segments,
+      parkedSegments,
+      subtitles: overrideSubtitles,
+      transitions,
+      subtitleSettings,
+      has_subtitles: overrideHasSubtitles,
+      font_size: subtitleSettings.font_size,
+      alignment: subtitleSettings.position,
+      subtitle_offset_ms: subtitleSettings.subtitle_offset_ms ?? 0,
+      totalDuration,
+      end_padding_seconds: 1.5,
+      canvas_display_width: canvasRef.current?.offsetWidth ?? 1920,
+    }),
+    [segments, parkedSegments, transitions, subtitleSettings, totalDuration],
+  );
+
+  const runGenerateSubtitles = useCallback(async () => {
+    if (!id || subtitleGenLockRef.current) return;
+    subtitleGenLockRef.current = true;
+    setSubtitleGenPending(true);
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    const hadSubs = hasSubtitlesRef.current;
+    const backupSubs = hadSubs ? [...subtitlesListRef.current] : [];
+    if (hadSubs) {
+      setSubtitles([]);
+    }
+    try {
+      const result = (await generateSubtitles(id)) as SubtitleLine[];
+      if (!Array.isArray(result)) {
+        showToast('Invalid subtitle response', 'error');
+        if (hadSubs) setSubtitles(backupSubs);
+        return;
+      }
+      const snapped = snapSubtitleLines(result);
+      await saveEditorState(id, buildPersistPayload(snapped, true));
+      setSubtitles(snapped);
+      setHasSubtitles(true);
+    } catch (err) {
+      if (hadSubs) setSubtitles(backupSubs);
+      showToast(err instanceof Error ? err.message : 'Request failed', 'error');
+    } finally {
+      subtitleGenLockRef.current = false;
+      setSubtitleGenPending(false);
+    }
+  }, [id, buildPersistPayload, showToast]);
+
   const [history, setHistory] = useState<HistorySnapshot[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
   const historyRef = useRef<HistorySnapshot[]>([]);
@@ -158,18 +268,29 @@ export default function EditorPage() {
         setSegments(finalSegments);
         setParkedSegments((editorState.parkedSegments as Segment[] | undefined) || []);
 
-        const stateSubtitles = editorState.subtitles as SubtitleLine[] | undefined;
-        if (stateSubtitles && stateSubtitles.length > 0) {
-          setSubtitles(stateSubtitles);
+        const rawSubs = editorState.subtitles;
+        const stateSubtitles: SubtitleLine[] = Array.isArray(rawSubs) ? rawSubs : [];
+        if (stateSubtitles.length > 0) {
+          setSubtitles(snapSubtitleLines(stateSubtitles));
           setHasSubtitles(true);
+        } else {
+          setSubtitles([]);
+          setHasSubtitles(false);
         }
         const stateTransitions = editorState.transitions as Record<string, Transition> | undefined;
         if (stateTransitions && Object.keys(stateTransitions).length > 0) {
           setTransitions(stateTransitions);
         }
         const stateSettings = editorState.subtitleSettings as Partial<SubtitleSettings> | undefined;
-        if (stateSettings && (stateSettings.font_size != null || stateSettings.position != null || stateSettings.color != null)) {
-          setSubtitleSettings({ ...DEFAULT_SUBTITLE_SETTINGS, ...stateSettings });
+        const rawOff = editorState.subtitle_offset_ms;
+        const hasStoredOffset = typeof rawOff === 'number' && Number.isFinite(rawOff);
+        if (
+          (stateSettings && (stateSettings.font_size != null || stateSettings.position != null || stateSettings.color != null)) ||
+          hasStoredOffset
+        ) {
+          const merged: SubtitleSettings = { ...DEFAULT_SUBTITLE_SETTINGS, ...stateSettings };
+          if (hasStoredOffset) merged.subtitle_offset_ms = Math.round(rawOff as number);
+          setSubtitleSettings(merged);
         }
 
         const duration = finalSegments.length > 0
@@ -191,6 +312,22 @@ export default function EditorPage() {
     };
     load();
   }, [id, showToast]);
+
+  useEffect(() => {
+    if (!dataLoaded || !id || autoSubtitlesInitRef.current) return;
+    if (segments.length === 0 || hasSubtitles || subtitleGenPending) return;
+    autoSubtitlesInitRef.current = true;
+    runGenerateSubtitles().catch(() => {
+      autoSubtitlesInitRef.current = false;
+    });
+  }, [
+    dataLoaded,
+    id,
+    segments.length,
+    hasSubtitles,
+    subtitleGenPending,
+    runGenerateSubtitles,
+  ]);
 
   useEffect(() => {
     if (!id || segments.length === 0) {
@@ -225,8 +362,8 @@ export default function EditorPage() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const width = 1280;
-    const height = 720;
+    const cw = canvas.width;
+    const ch = canvas.height;
 
     const activeSeg = segments.find((s) => s.start <= time && time < s.end);
     const lastSegment = segments.length > 0 ? segments[segments.length - 1] : null;
@@ -235,7 +372,10 @@ export default function EditorPage() {
     if (segmentToRender) {
       const img = preloadedImages[segmentToRender.segment_id.toString()];
       if (img && img.complete && img.naturalWidth > 0) {
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, cw, ch);
+        const r0 = letterboxRect(img.naturalWidth, img.naturalHeight, cw, ch);
+        ctx.drawImage(img, r0.dx, r0.dy, r0.dw, r0.dh);
         // Check if we are in a fade transition zone
         const segIndex = segments.findIndex(s => s.start <= time && time < s.end);
         if (segIndex >= 0 && segIndex < segments.length - 1) {
@@ -249,9 +389,10 @@ export default function EditorPage() {
             if (time >= fadeStart) {
               const alpha = (time - fadeStart) / fadeDur;
               const nextImg = preloadedImages[nextSeg.segment_id.toString()];
-              if (nextImg) {
+              if (nextImg && nextImg.complete && nextImg.naturalWidth > 0) {
                 ctx.globalAlpha = alpha;
-                ctx.drawImage(nextImg, 0, 0, canvas.width, canvas.height);
+                const r1 = letterboxRect(nextImg.naturalWidth, nextImg.naturalHeight, cw, ch);
+                ctx.drawImage(nextImg, r1.dx, r1.dy, r1.dw, r1.dh);
                 ctx.globalAlpha = 1.0;
               }
             }
@@ -259,16 +400,17 @@ export default function EditorPage() {
         }
       } else {
         ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, width, height);
+        ctx.fillRect(0, 0, cw, ch);
       }
     } else {
       ctx.fillStyle = '#000000';
-      ctx.fillRect(0, 0, width, height);
+      ctx.fillRect(0, 0, cw, ch);
     }
 
-    const activeLine = subtitles.find(l => l.start <= time && time < l.end);
+    const subTime = time - (subtitleSettings.subtitle_offset_ms ?? 0) / 1000;
+    const activeLine = subtitles.find((l) => l.start <= subTime && subTime < l.end);
     if (activeLine) {
-      const scaledFontSize = Math.round((subtitleSettings.font_size || 48) * (canvas.width / 1920));
+      const scaledFontSize = Math.round((subtitleSettings.font_size || 48) * (canvas.width / EXPORT_W));
       ctx.font = `bold ${scaledFontSize}px Arial`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -281,7 +423,7 @@ export default function EditorPage() {
         const outlineWidth = subtitleSettings.outline_width ?? 4;
         if (outlineWidth > 0) {
           ctx.strokeStyle = '#000000';
-          ctx.lineWidth = outlineWidth * (canvas.width / 1920);
+          ctx.lineWidth = outlineWidth * (canvas.width / EXPORT_W);
           ctx.strokeText(activeLine.text, canvas.width / 2, y);
         }
         ctx.fillStyle = baseColor;
@@ -293,10 +435,10 @@ export default function EditorPage() {
         ctx.textAlign = 'left';
         words.forEach((w, i) => {
           const wordWithSpace = i < words.length - 1 ? w.word + ' ' : w.word;
-          const isActive = w.start <= time && time < w.end;
+          const isActive = w.start <= subTime && subTime < w.end;
           if (outlineWidth > 0) {
             ctx.strokeStyle = '#000000';
-            ctx.lineWidth = outlineWidth * (canvas.width / 1920);
+            ctx.lineWidth = outlineWidth * (canvas.width / EXPORT_W);
             ctx.strokeText(wordWithSpace, x, y);
           }
           ctx.fillStyle = isActive ? highlightColor : baseColor;
@@ -327,21 +469,20 @@ export default function EditorPage() {
     if (audioEl) {
       audioEl.currentTime = currentTimeRef.current;
       audioEl.playbackRate = playbackSpeed;
-      audioEl.play();
+      void audioEl.play();
     }
-    lastTimeRef.current = performance.now();
     const loop = () => {
-      const now = performance.now();
-      const delta = ((now - lastTimeRef.current) / 1000) * playbackSpeed;
-      lastTimeRef.current = now;
-      setCurrentTime((prev) => {
-        const newTime = prev + delta;
-        if (newTime >= totalDuration) {
+      const el = audioRef.current;
+      if (el && !el.paused) {
+        const cap =
+          totalDuration > 0 ? totalDuration : (Number.isFinite(el.duration) && el.duration > 0 ? el.duration : Infinity);
+        const t = Math.min(Math.max(0, el.currentTime), cap);
+        setCurrentTime(t);
+        if (totalDuration > 0 && t >= totalDuration - 0.02) {
           setIsPlaying(false);
-          return totalDuration;
+          setCurrentTime(totalDuration);
         }
-        return newTime;
-      });
+      }
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
@@ -357,6 +498,20 @@ export default function EditorPage() {
   }, [isPlaying, totalDuration, playbackSpeed]);
 
   useEffect(() => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
+    const onEnded = () => {
+      setIsPlaying(false);
+      const dur = Number.isFinite(audioEl.duration) ? audioEl.duration : 0;
+      setCurrentTime((prev) =>
+        totalDuration > 0 ? Math.min(totalDuration, Math.max(prev, dur)) : dur,
+      );
+    };
+    audioEl.addEventListener('ended', onEnded);
+    return () => audioEl.removeEventListener('ended', onEnded);
+  }, [totalDuration]);
+
+  useEffect(() => {
     if (!isPlaying) return;
     const outer = timelineOuterRef.current;
     if (!outer) return;
@@ -369,35 +524,12 @@ export default function EditorPage() {
     }
   }, [currentTime, isPlaying, totalDuration, timelineZoom, timelineContainerWidth]);
 
-  useEffect(() => {
-    if (!imagesLoaded || !canvasRef.current) return;
-    const canvas = canvasRef.current;
-    const firstSeg = segments[0];
-    if (firstSeg && preloadedImages[firstSeg.segment_id.toString()]) {
-      const img = preloadedImages[firstSeg.segment_id.toString()];
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-    } else {
-      canvas.width = 1920;
-      canvas.height = 1080;
-    }
-  }, [imagesLoaded, segments, preloadedImages]);
-
-  useEffect(() => {
-    if (isPlaying) return;
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const activeSeg = segments.find(s => s.start <= currentTime && currentTime < s.end)
-      || (currentTime >= (segments[segments.length - 1]?.end ?? 0) ? segments[segments.length - 1] : segments[0]);
-    if (!activeSeg) return;
-    const img = preloadedImages[activeSeg.segment_id.toString()];
-    if (img) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    }
-  }, [currentTime, isPlaying, segments, preloadedImages]);
+    canvas.width = EXPORT_W;
+    canvas.height = EXPORT_H;
+  }, [dataLoaded]);
 
   useEffect(() => {
     const el = timelineOuterRef.current;
@@ -516,14 +648,9 @@ export default function EditorPage() {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(() => {
       autoSaveTimerRef.current = null;
-      const editorState = {
-        ...editorStateRef.current,
-        // parkedSegments persisted for parking track feature
-        parkedSegments,
-      };
-      saveEditorState(id, editorState);
+      saveEditorState(id, persistStateRef.current);
     }, 1000);
-  }, [id, parkedSegments]);
+  }, [id]);
 
   const handleEdit = useCallback(
     (idx: number, newText: string) => {
@@ -551,25 +678,14 @@ export default function EditorPage() {
 
   const handleBack = () => router.push(`/project/${encodeProjectIdForRoute(id)}`);
 
-  const buildEditorState = () => ({
-    segments,
-    parkedSegments,
-    transitions,
-    subtitles,
-    has_subtitles: hasSubtitles,
-    font_size: subtitleSettings.font_size,
-    alignment: subtitleSettings.position,
-    subtitleSettings,
-    canvas_display_width: canvasRef.current ? canvasRef.current.offsetWidth : 1920,
-    totalDuration: totalDuration,
-    end_padding_seconds: 1.5,
-  });
+  const buildEditorState = () => ({ ...persistStateRef.current });
 
   const handleExportClick = async () => {
     if (!id) return;
     setShowExportOverlay(true);
     setExportError(null);
     setExportDone(false);
+    setExportSubtitleQcWarnings(null);
     setExportStatus('Starting…');
     try {
       const state = buildEditorState();
@@ -591,10 +707,17 @@ export default function EditorPage() {
     if (!exportJobId) return;
     const interval = setInterval(async () => {
       try {
-        const s = await getJobStatus(exportJobId) as { status?: string; percent?: number; error?: string };
+        const s = await getJobStatus(exportJobId) as {
+          status?: string;
+          percent?: number;
+          error?: string;
+          subtitle_qc_warnings?: string[];
+        };
         if (s?.status === 'done') {
           setExportDone(true);
           setExportStatus('Done');
+          const w = s?.subtitle_qc_warnings;
+          setExportSubtitleQcWarnings(Array.isArray(w) && w.length > 0 ? w : null);
           setExportJobId(null);
         } else if (s?.status === 'error') {
           setExportError(s?.error ?? 'Export failed');
@@ -680,7 +803,7 @@ export default function EditorPage() {
           <input
             ref={replaceInputRef}
             type="file"
-            accept="image/png,image/jpeg"
+            accept="image/png,image/jpeg,image/jfif,.jfif"
             style={{ display: 'none' }}
             onChange={async (e) => {
               const file = e.target.files?.[0];
@@ -692,7 +815,7 @@ export default function EditorPage() {
               const imageName = seg.image;
               const formData = new FormData();
               formData.append('file', file);
-              const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+              const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8050';
               await fetch(`${apiBase}/api/projects/${encodeProjectIdForPath(id)}/replace-image/${encodeURIComponent(imageName)}`, {
                 method: 'POST',
                 body: formData,
@@ -719,7 +842,7 @@ export default function EditorPage() {
           <input
             ref={addInputRef}
             type="file"
-            accept="image/png,image/jpeg"
+            accept="image/png,image/jpeg,image/jfif,.jfif"
             style={{ display: 'none' }}
             onChange={async (e) => {
               const file = e.target.files?.[0];
@@ -727,10 +850,14 @@ export default function EditorPage() {
               const idx = segments.findIndex(s => s.segment_id === selectedSegmentId);
               if (idx === -1) return;
               const newId = Date.now();
-              const newImageName = `${newId}.png`;
+              const dot = file.name.lastIndexOf('.');
+              const rawExt = dot >= 0 ? file.name.slice(dot).toLowerCase() : '';
+              const ext =
+                rawExt === '.png' || rawExt === '.jpg' || rawExt === '.jpeg' || rawExt === '.jfif' ? rawExt : '.png';
+              const newImageName = `${newId}${ext}`;
               const formData = new FormData();
               formData.append('file', file);
-              const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+              const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8050';
               await fetch(`${apiBase}/api/projects/${encodeProjectIdForPath(id)}/replace-image/${encodeURIComponent(newImageName)}`, {
                 method: 'POST',
                 body: formData,
@@ -852,37 +979,85 @@ export default function EditorPage() {
 
         <div className="mx-4 mt-4 flex gap-4">
           <div className="flex-[0.6] flex flex-col">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
               <span className="text-[color:var(--garden-text)] font-semibold">Subtitles</span>
-              <button
-                onClick={() => setSubtitlesPanelOpen(o => !o)}
-                className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] transition-colors"
-              >
-                {subtitlesPanelOpen ? '▲ Hide' : '▼ Show'}
-              </button>
+              <div className="flex items-center gap-2">
+                {hasSubtitles && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={subtitleGenPending}
+                      onClick={() => void runGenerateSubtitles()}
+                      className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] transition-colors disabled:opacity-50"
+                    >
+                      {subtitleGenPending ? 'Regenerating…' : 'Regenerate from audio'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={subtitleGenPending}
+                      onClick={async () => {
+                        if (!id) return;
+                        if (autoSaveTimerRef.current) {
+                          clearTimeout(autoSaveTimerRef.current);
+                          autoSaveTimerRef.current = null;
+                        }
+                        const payload = {
+                          segments,
+                          parkedSegments,
+                          subtitles: [] as SubtitleLine[],
+                          transitions,
+                          subtitleSettings,
+                          has_subtitles: false,
+                          font_size: subtitleSettings.font_size,
+                          alignment: subtitleSettings.position,
+                          subtitle_offset_ms: subtitleSettings.subtitle_offset_ms ?? 0,
+                          totalDuration,
+                          end_padding_seconds: 1.5,
+                          canvas_display_width: canvasRef.current?.offsetWidth ?? 1920,
+                        };
+                        try {
+                          await saveEditorState(id, payload);
+                          setSubtitles([]);
+                          setHasSubtitles(false);
+                          showToast('All subtitles removed', 'success');
+                        } catch (err) {
+                          showToast(err instanceof Error ? err.message : 'Could not save', 'error');
+                        }
+                      }}
+                      className="text-[color:var(--garden-text-soft)] hover:text-red-400 text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-red-400/60 transition-colors disabled:opacity-50"
+                    >
+                      Remove all subtitles
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSubtitlesPanelOpen(o => !o)}
+                  className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] transition-colors"
+                >
+                  {subtitlesPanelOpen ? '▲ Hide' : '▼ Show'}
+                </button>
+              </div>
             </div>
             {subtitlesPanelOpen && (
             <>
             {!hasSubtitles ? (
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    const result = (await generateSubtitles(id)) as SubtitleLine[];
-                    if (Array.isArray(result)) {
-                      setSubtitles(result);
-                      setHasSubtitles(true);
-                      autoSave();
-                    }
-                  } catch (err) {
-                    showToast(err instanceof Error ? err.message : 'Request failed', 'error');
-                  }
-                }}
-                className="rounded px-4 py-2 text-sm font-medium text-[color:var(--garden-cream)] w-fit"
-                style={{ backgroundColor: 'var(--garden-accent)' }}
-              >
-                Generate Subtitles
-              </button>
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  disabled={subtitleGenPending}
+                  onClick={() => void runGenerateSubtitles()}
+                  className="rounded px-4 py-2 text-sm font-medium text-[color:var(--garden-cream)] w-fit disabled:opacity-60"
+                  style={{ backgroundColor: 'var(--garden-accent)' }}
+                >
+                  {subtitleGenPending ? 'Generating from transcript…' : 'Generate Subtitles'}
+                </button>
+                {subtitleGenPending && (
+                  <p className="text-xs text-[color:var(--garden-text-soft)]">
+                    Building fresh captions from your audio file (not from an old save).
+                  </p>
+                )}
+              </div>
             ) : (
               <>
                 <div className="flex flex-wrap items-center gap-3 mb-2">
@@ -953,6 +1128,27 @@ export default function EditorPage() {
                       className="w-24 accent-[color:var(--garden-accent)]"
                     />
                     <span className="text-[color:var(--garden-step-muted)] text-xs">{subtitleSettings.outline_width ?? 4}px</span>
+                  </label>
+                  <label className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[color:var(--garden-text-soft)] text-xs whitespace-nowrap" title="Shifts all cues vs video/audio for export and preview">
+                      Timing offset (ms)
+                    </span>
+                    <input
+                      type="number"
+                      min={-3000}
+                      max={3000}
+                      step={10}
+                      value={subtitleSettings.subtitle_offset_ms ?? 0}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        setSubtitleSettings((s) => ({
+                          ...s,
+                          subtitle_offset_ms: Number.isFinite(n) ? Math.round(n) : 0,
+                        }));
+                        autoSave();
+                      }}
+                      className="w-20 bg-[var(--garden-surface)] border border-[color:var(--garden-border)] rounded text-[color:var(--garden-text)] text-xs px-2 py-1"
+                    />
                   </label>
                 </div>
                 <div className="max-h-64 overflow-y-auto space-y-1">
@@ -1669,6 +1865,25 @@ export default function EditorPage() {
               </div>
             )}
             {exportError && <p className="text-[color:var(--garden-danger)] text-sm mb-4">{exportError}</p>}
+            {exportDone && exportSubtitleQcWarnings && exportSubtitleQcWarnings.length > 0 && (
+              <div
+                className="text-sm mb-4 max-h-48 overflow-y-auto rounded-lg p-3 border"
+                style={{
+                  borderColor: 'var(--garden-border)',
+                  backgroundColor: 'color-mix(in srgb, var(--garden-warning, #b45309) 12%, var(--garden-card))',
+                  color: 'var(--garden-text)',
+                }}
+              >
+                <p className="font-semibold mb-2" style={{ color: 'var(--garden-warning, #b45309)' }}>
+                  Subtitle QC notes (export completed anyway)
+                </p>
+                <ul className="list-disc pl-5 space-y-1 text-xs" style={{ color: 'var(--garden-text-soft)' }}>
+                  {exportSubtitleQcWarnings.map((line, i) => (
+                    <li key={i}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {exportDone && (
               <a
                 href={fileUrl(id, 'output.mp4')}
@@ -1689,6 +1904,7 @@ export default function EditorPage() {
                   setExportStatus('');
                   setExportError(null);
                   setExportDone(false);
+                  setExportSubtitleQcWarnings(null);
                 }}
                 disabled={!exportDone && !exportError}
                 className="rounded px-4 py-2 text-sm font-medium text-[color:var(--garden-cream)] disabled:opacity-50 disabled:cursor-not-allowed"
