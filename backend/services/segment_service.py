@@ -12,6 +12,47 @@ SPLIT_PROMPT = (
 )
 
 
+def _clean_script_for_splitting(script_text: str) -> str:
+    """
+    Strip non-narration content that causes the segment splitter to hang or
+    produce broken JSON:
+      - Markdown table rows (lines starting with |)
+      - Phase/section headers (## PHASE, ## CITATIONS, ## RETENTION etc.)
+      - Retention engineering map tables
+      - Citation reference blocks (lines that look like "| Claim | Citation |")
+      - Lines that are only markdown formatting (---, ===, ---)
+      - [VISUAL CUE: ...] and other production markers are kept — they help
+        the animator but do not break segment JSON parsing.
+    """
+    lines = script_text.splitlines()
+    cleaned: list[str] = []
+    in_citation_block = False
+    for line in lines:
+        stripped = line.strip()
+        # Detect start of citations block and skip everything after it
+        if re.match(r'^#{1,3}\s*(CITATIONS|CITATION|REFERENCES|SOURCES)', stripped, re.IGNORECASE):
+            in_citation_block = True
+        if in_citation_block:
+            continue
+        # Skip markdown table rows
+        if stripped.startswith('|'):
+            continue
+        # Skip pure horizontal rules
+        if re.match(r'^[-=]{3,}$', stripped):
+            continue
+        # Skip phase/section markdown headers that are structural, not narration
+        if re.match(r'^#{1,4}\s*(PHASE|RETENTION|HOOK SELECTED|SCORE:|REASON:)', stripped, re.IGNORECASE):
+            continue
+        # Skip timing/metadata lines like "0:00 – 0:30 · Emotion: ..."
+        if re.match(r'^\d+:\d+\s*[–-]', stripped):
+            continue
+        cleaned.append(line)
+
+    # Collapse runs of 3+ blank lines to 2
+    result = re.sub(r'\n{3,}', '\n\n', '\n'.join(cleaned))
+    return result.strip()
+
+
 def _chunk_script_for_split(script_text: str, max_chars: int) -> list[str]:
     """
     Split a long script into chunks that each fit comfortably in one API call
@@ -68,8 +109,10 @@ async def split_script_to_segments(script_text: str) -> list:
     """
     Split full script into segments. Long scripts (e.g. 20–30+ min) are processed
     in multiple API calls so input/output limits never truncate the full segment list.
+    Non-narration content (citation tables, markdown headers, phase timestamps) is
+    stripped before splitting to prevent JSON parse failures and API hangs.
     """
-    script_text = (script_text or '').strip()
+    script_text = _clean_script_for_splitting(script_text or '')
     if not script_text:
         return []
 
