@@ -471,7 +471,7 @@ def _run_generate_prompts(project_id: str, script_text: str, job_id: str, image_
     asyncio.set_event_loop(loop)
     try:
         results = loop.run_until_complete(
-            generate_mj_prompts(project_id, script_text, job_status, image_provider=image_provider)
+            generate_mj_prompts(project_id, script_text, job_status, image_provider=image_provider, job_id=job_id)
         )
         project_dir = get_project_dir(project_id)
         with open(project_dir / "mj_prompts.json", "w", encoding="utf-8") as f:

@@ -687,16 +687,29 @@ def _build_grok_line(prompt_text, _segment_id):
     return t
 
 
-async def generate_mj_prompts(project_id, script_text, job_status, image_provider: str = "midjourney"):
+async def generate_mj_prompts(project_id, script_text, job_status, image_provider: str = "midjourney", job_id: str | None = None):
+    from .job_store import job_put as _job_put
+
+    def _persist():
+        """Write the current in-memory status dict to SQLite so the frontend sees it immediately."""
+        if job_id:
+            _job_put(job_id, dict(job_status))
+
     job_status['status'] = 'splitting'
     job_status['percent'] = 0
+    _persist()
+
     segments = await split_script_to_segments(script_text)
     n = len(segments)
+
     job_status['status'] = 'generating'
     job_status['percent'] = 10
+    _persist()
+
     if n == 0:
         job_status['status'] = 'done'
         job_status['percent'] = 100
+        _persist()
         return []
 
     # Long scripts: pack requests by character budget, then recursively split any batch
@@ -719,9 +732,11 @@ async def generate_mj_prompts(project_id, script_text, job_status, image_provide
         results.extend(part)
         done += hi - lo
         job_status['percent'] = 10 + int(85 * done / max(n, 1))
+        _persist()
 
     job_status['status'] = 'done'
     job_status['percent'] = 100
+    _persist()
     return results
 
 

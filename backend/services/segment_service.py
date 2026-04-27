@@ -123,11 +123,18 @@ async def split_script_to_segments(script_text: str) -> list:
     max_out = max(1, min(8192, max_out_raw))
     chunks = _chunk_script_for_split(script_text, chunk_limit)
 
-    client = AsyncOpenAI(api_key=os.getenv('DEEPSEEK_API_KEY'), base_url='https://api.deepseek.com')
+    # max_retries=0: the SDK retries up to 2× on timeout/5xx by default.
+    # With a 60-second timeout that means up to 3 minutes of silent waiting per chunk.
+    # Fail fast instead — the user will see a clear error and can retry immediately.
+    client = AsyncOpenAI(
+        api_key=os.getenv('DEEPSEEK_API_KEY'),
+        base_url='https://api.deepseek.com',
+        max_retries=0,
+    )
     model = os.getenv('DEEPSEEK_MODEL', 'deepseek-chat')
 
     all_segments: list[str] = []
-    timeout_s = float(os.getenv('DEEPSEEK_SPLIT_TIMEOUT_SECONDS', '90'))
+    timeout_s = float(os.getenv('DEEPSEEK_SPLIT_TIMEOUT_SECONDS', '60'))
     for chunk in chunks:
         prompt = SPLIT_PROMPT.format(script_text=chunk)
         response = await client.chat.completions.create(
