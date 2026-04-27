@@ -38,7 +38,7 @@ Use this exact shape:
   "title": "The single best YouTube title — apply all rules above",
   "description": "Full YouTube description 200-350 words as specified in DELIVERABLE 2",
   "chapter_timestamps": "00:00 — Chapter Name\\n01:30 — Chapter Name\\n... (5-8 chapters as in DELIVERABLE 3)",
-  "tags": "tag1, tag2, tag3, ... (25-30 comma-separated tags as in DELIVERABLE 4)",
+  "tags": "exact title as tag, 2-3 common misspellings or alternative names for this topic, channel name — tags are deprecated in 2026 (YouTube official), only provide misspellings/disambiguation",
   "alternative_titles": [
     {"title": "Alt title 1", "formula": "formula name", "viewer_state": "exact viewer this targets", "advantage": "one sentence why this might outperform the primary"},
     {"title": "Alt title 2", "formula": "formula name", "viewer_state": "exact viewer this targets", "advantage": "one sentence why this might outperform the primary"},
