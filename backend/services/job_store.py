@@ -89,6 +89,8 @@ _TRANSITIVE_BROKEN = (
     "aligning",
     "correcting",
     "exporting",
+    "splitting",
+    "generating",
 )
 
 
