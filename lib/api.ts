@@ -296,6 +296,13 @@ export function fileUrl(id: string, path: string): string {
   return `${API}/api/projects/${pid(id)}/files/${safePath}`;
 }
 
+export type AltTitle = {
+  title: string;
+  formula: string;
+  viewer_state: string;
+  advantage: string;
+};
+
 export type SeoDataPayload = {
   description: string;
   chapter_timestamps: string;
@@ -305,6 +312,7 @@ export type SeoDataPayload = {
   /** CTR title from DeepSeek (step 8) — see deepseek-title-system-prompt.md */
   deepseek_video_title?: string;
   deepseek_title_raw?: string;
+  alternative_titles?: AltTitle[];
 };
 
 export async function getSeoData(id: string): Promise<SeoDataPayload> {
@@ -356,6 +364,14 @@ export async function getThumbnailPrompts(id: string): Promise<ThumbnailPromptVa
 /** DeepSeek CTR title — uses script.txt + deepseek-title-system-prompt.md */
 export async function generateVideoTitle(id: string): Promise<{ final_title: string; raw?: string }> {
   const res = await fetch(`${API}/api/projects/${pid(id)}/generate-video-title`, { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
+  return data;
+}
+
+/** DeepSeek generates full SEO package: title, description, timestamps, tags, alt titles. */
+export async function generateSeoData(id: string): Promise<SeoDataPayload> {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/generate-seo`, { method: 'POST' });
   const data = await res.json();
   if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
   return data;

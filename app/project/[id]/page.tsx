@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getProject, resetStep, deleteProject, getPromptTemplate, updateTitle, stepComplete, cleanScript, saveScript, getPrompts, generatePrompts, getJobStatus, checkImages, regeneratePrompt, fileUrl, uploadAudio, getAudioStatus, assembleSegments, getSeoData, saveSeoData, patchImageProvider, patchPipelineSettings, generateThumbnailPrompts, getThumbnailPrompts, generateVideoTitle, getGrokImageSystemPrompt, type SeoDataPayload, type ThumbnailPromptVariant } from '@/lib/api';
+import { getProject, resetStep, deleteProject, getPromptTemplate, updateTitle, stepComplete, cleanScript, saveScript, getPrompts, generatePrompts, getJobStatus, checkImages, regeneratePrompt, fileUrl, uploadAudio, getAudioStatus, assembleSegments, getSeoData, saveSeoData, generateSeoData, patchImageProvider, patchPipelineSettings, generateThumbnailPrompts, getThumbnailPrompts, generateVideoTitle, getGrokImageSystemPrompt, type SeoDataPayload, type AltTitle, type ThumbnailPromptVariant } from '@/lib/api';
 import { projectIdFromParams, encodeProjectIdForRoute } from '@/lib/projectId';
 import useToast from '@/hooks/useToast';
 import Toast from '@/components/Toast';
@@ -29,8 +29,7 @@ const STEPS = [
   { num: 5, name: 'Audio Processing' },
   { num: 6, name: 'Assemble and Edit' },
   { num: 7, name: 'Thumbnail' },
-  { num: 7.1, name: 'Thumbnail Review' },
-  { num: 8, name: 'SEO Description' },
+  { num: 8, name: 'SEO & Title' },
   { num: 9, name: 'Final Review' },
 ];
 
@@ -193,9 +192,8 @@ export default function ProjectPage() {
   const [step5Result, setStep5Result] = useState<{ duration_sec?: number; word_count?: number; words_corrected?: number } | null>(null);
   const [step5Error, setStep5Error] = useState<string | null>(null);
   const [assembleBusy, setAssembleBusy] = useState(false);
-  const [step7Combined, setStep7Combined] = useState<string>('');
-  const [step7Copied, setStep7Copied] = useState(false);
-  const [thumbnailReviewPrompt, setThumbnailReviewPrompt] = useState('');
+  const [seoGenLoading, setSeoGenLoading] = useState(false);
+  const [seoAltTitles, setSeoAltTitles] = useState<AltTitle[]>([]);
   const [seoYoutubeDescription, setSeoYoutubeDescription] = useState('');
   const [seoChapterTimestamps, setSeoChapterTimestamps] = useState('');
   const [seoTags, setSeoTags] = useState('');
@@ -380,13 +378,6 @@ export default function ProjectPage() {
     }
   }, [id]);
   useEffect(() => {
-    if (id && displayStep === 7.1) {
-      getPromptTemplate('8_thumbnail_review_prompt')
-        .then((r: { content?: string }) => setThumbnailReviewPrompt(r?.content ?? ''))
-        .catch(() => {});
-    }
-  }, [id, displayStep]);
-  useEffect(() => {
     if (!id || (displayStep !== 8 && displayStep !== 9)) return;
     getSeoData(id)
       .then((data: SeoDataPayload) => {
@@ -396,6 +387,7 @@ export default function ProjectPage() {
         setSeoTitleField(data.seo_title ?? '');
         setDeepseekVideoTitle(data.deepseek_video_title ?? '');
         setDeepseekTitleRaw(data.deepseek_title_raw ?? '');
+        if (data.alternative_titles) setSeoAltTitles(data.alternative_titles);
       })
       .catch(() => {});
   }, [id, displayStep]);
@@ -410,19 +402,6 @@ export default function ProjectPage() {
         });
     }
   }, [id, displayStep, showToast]);
-  useEffect(() => {
-    if (id && displayStep === 8) {
-      Promise.all([
-        getPromptTemplate('5_seo').then((r: { content?: string }) => r?.content ?? ''),
-        fetch(fileUrl(id, 'script.txt')).then((r) => r.text()).catch(() => ''),
-      ])
-        .then(([tpl, script]) => {
-          const combined = (tpl + (project?.title ? '\n\n' + project.title : '') + (script ? '\n\n' + script : '')).trim();
-          setStep7Combined(combined);
-        })
-        .catch((err) => showToast(err instanceof Error ? err.message : 'Request failed', 'error'));
-    }
-  }, [id, displayStep, project?.title, showToast]);
   useEffect(() => {
     if (!id || displayStep !== 5) return;
     getAudioStatus(id)
@@ -1193,49 +1172,13 @@ export default function ProjectPage() {
                         style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                         onClick={() => {
                           if (!id) return;
-                          stepComplete(id, 7, 7.1)
+                          stepComplete(id, 7, 8)
                             .then(() => fetchProject())
                             .then(() => showToast('Step complete', 'success'))
                             .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'));
                         }}
                       >
                         Mark Thumbnail Done
-                      </button>
-                    </>
-                  )}
-                  {num === 7.1 && (
-                    <>
-                      <h2 className="mt-4 text-lg font-semibold" style={{ color: 'var(--garden-text)' }}>
-                        Thumbnail Review
-                      </h2>
-                      <div className="mt-3 rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto font-mono text-sm" style={{ backgroundColor: 'var(--garden-surface)', borderLeftColor: 'var(--garden-accent)', color: 'var(--garden-text)' }}>
-                        <pre className="whitespace-pre-wrap">{thumbnailReviewPrompt || 'Loading…'}</pre>
-                      </div>
-                      <button
-                        type="button"
-                        className="mt-2 rounded px-2 py-1 text-xs"
-                        style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text)' }}
-                        onClick={() => {
-                          const extra = step4CustomInput.trim();
-                          const text = thumbnailReviewPrompt + (extra ? '\n\n' + extra : '');
-                          navigator.clipboard.writeText(text);
-                        }}
-                      >
-                        Copy Prompt
-                      </button>
-                      <button
-                        type="button"
-                        className="mt-3 rounded px-3 py-1.5 text-sm font-medium"
-                        style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
-                        onClick={() => {
-                          if (!id) return;
-                          stepComplete(id, 7.1, 8)
-                            .then(() => fetchProject())
-                            .then(() => showToast('Thumbnail review complete', 'success'))
-                            .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'));
-                        }}
-                      >
-                        Mark Complete
                       </button>
                     </>
                   )}
@@ -1457,22 +1400,33 @@ export default function ProjectPage() {
                   )}
                   {num === 8 && (
                     <>
-                      <div className="mt-4 rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: 'var(--garden-surface)', borderLeftColor: 'var(--garden-accent)', color: 'var(--garden-text)' }}>
+                      <div className="mt-4 flex items-center gap-3">
                         <button
                           type="button"
-                          className="absolute top-2 right-2 rounded px-2 py-1 text-xs"
-                          style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text)' }}
+                          disabled={seoGenLoading || !id}
+                          className="rounded-xl px-4 py-2 text-sm font-semibold shadow-sm transition-all hover:brightness-105 disabled:opacity-50"
+                          style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                           onClick={() => {
-                            if (step7Combined) {
-                              navigator.clipboard.writeText(step7Combined);
-                              setStep7Copied(true);
-                              setTimeout(() => setStep7Copied(false), 2000);
-                            }
+                            if (!id) return;
+                            setSeoGenLoading(true);
+                            generateSeoData(id)
+                              .then((pkg: SeoDataPayload) => {
+                                setSeoYoutubeDescription(pkg.description ?? '');
+                                setSeoChapterTimestamps(pkg.chapter_timestamps ?? '');
+                                setSeoTags(pkg.tags ?? '');
+                                setSeoTitleField(pkg.seo_title ?? '');
+                                setSeoAltTitles(pkg.alternative_titles ?? []);
+                                showToast('SEO package generated', 'success');
+                              })
+                              .catch((err) => showToast(err instanceof Error ? err.message : 'Generation failed', 'error'))
+                              .finally(() => setSeoGenLoading(false));
                           }}
                         >
-                          {step7Copied ? '✓' : 'Copy'}
+                          {seoGenLoading ? 'Generating…' : seoYoutubeDescription ? 'Regenerate SEO' : 'Generate SEO with AI'}
                         </button>
-                        <pre className="whitespace-pre-wrap pr-16">{step7Combined || 'Loading…'}</pre>
+                        <span className="text-xs" style={{ color: 'var(--garden-text-soft)' }}>
+                          DeepSeek writes title, description, chapters, and tags from your script automatically
+                        </span>
                       </div>
                       <div className="mt-4 space-y-4">
                         <div>
@@ -1514,6 +1468,38 @@ export default function ProjectPage() {
                           />
                         </div>
                       </div>
+                      {seoAltTitles.length > 0 && (
+                        <div className="mt-4">
+                          <label className="garden-label-soft block text-sm mb-2">Alternative Title Options</label>
+                          <div className="space-y-2">
+                            {seoAltTitles.map((alt, i) => (
+                              <div
+                                key={i}
+                                className="rounded-lg border p-3"
+                                style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-surface)' }}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="text-sm font-medium" style={{ color: 'var(--garden-text)' }}>{alt.title}</p>
+                                  <button
+                                    type="button"
+                                    className="shrink-0 rounded px-2 py-0.5 text-xs"
+                                    style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text-soft)' }}
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(alt.title);
+                                      showToast('Copied', 'success');
+                                    }}
+                                  >
+                                    Copy
+                                  </button>
+                                </div>
+                                <p className="text-xs mt-1" style={{ color: 'var(--garden-text-soft)' }}>
+                                  <span className="font-medium">{alt.formula}</span> — {alt.advantage}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       <div className="mt-3">
                         <button
                           type="button"
@@ -1529,6 +1515,7 @@ export default function ProjectPage() {
                               cleaned_script: '',
                               deepseek_video_title: deepseekVideoTitle,
                               deepseek_title_raw: deepseekTitleRaw,
+                              alternative_titles: seoAltTitles,
                             };
                             saveSeoData(id, payload)
                               .then(() => stepComplete(id, 8))
@@ -1716,7 +1703,7 @@ export default function ProjectPage() {
                       </div>
                     </>
                   )}
-                  {num !== 1 && num !== 2 && num !== 3 && num !== 3.5 && num !== 4 && num !== 5 && num !== 6 && num !== 7 && num !== 7.1 && num !== 8 && num !== 9 && <div className="h-24 rounded-xl border border-dashed" style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-well)' }} />}
+                  {num !== 1 && num !== 2 && num !== 3 && num !== 3.5 && num !== 4 && num !== 5 && num !== 6 && num !== 7 && num !== 8 && num !== 9 && <div className="h-24 rounded-xl border border-dashed" style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-well)' }} />}
                 </div>
               )}
 

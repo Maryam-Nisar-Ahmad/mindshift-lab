@@ -29,6 +29,7 @@ from services.clean_service import *
 from services.job_store import job_put, job_get, recover_stale_jobs_on_startup, watchdog_reap_stale_processing
 from services.thumbnail_service import generate_three_thumbnail_prompts
 from services.title_service import generate_video_title
+from services.seo_service import generate_seo_package
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 
@@ -566,6 +567,43 @@ async def generate_video_title_route(id: str):
     with open(seo_path, "w", encoding="utf-8") as f:
         json.dump(merged, f, indent=2, ensure_ascii=False)
     return {"final_title": final_title, "raw": raw_resp}
+
+
+@app.post("/api/projects/{id}/generate-seo")
+async def generate_seo_route(id: str):
+    """DeepSeek generates full SEO package: title, description, timestamps, tags, alt titles."""
+    project_dir = get_project_dir(id)
+    script_path = project_dir / "script.txt"
+    if not script_path.exists():
+        raise HTTPException(status_code=400, detail="script.txt required — save your script first")
+    script_text = script_path.read_text(encoding="utf-8")
+    meta_path = project_dir / "meta.json"
+    working_title = ""
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            working_title = meta.get("title", "")
+        except json.JSONDecodeError:
+            pass
+    pkg = await generate_seo_package(working_title, script_text)
+    # Merge into existing seo_data.json so we don't clobber deepseek_video_title
+    seo_path = project_dir / "seo_data.json"
+    merged: dict = {}
+    if seo_path.exists():
+        try:
+            merged = json.loads(seo_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            merged = {}
+    merged.update({
+        "description": pkg["description"],
+        "chapter_timestamps": pkg["chapter_timestamps"],
+        "tags": pkg["tags"],
+        "seo_title": pkg["title"],
+        "alternative_titles": pkg["alternative_titles"],
+    })
+    with open(seo_path, "w", encoding="utf-8") as f:
+        json.dump(merged, f, indent=2, ensure_ascii=False)
+    return pkg
 
 
 @app.get("/api/projects/{project_id}/seo-data")
