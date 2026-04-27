@@ -421,6 +421,7 @@ def step_complete(id: str, body: StepCompleteBody):
 def get_prompt(name: str):
     PROMPT_FILES = {
         "1_channel_strategy": "1_channel_strategy.txt",
+        "2a_perplexity_research": "2a_perplexity_research.txt",
         "2_script_generation": "2_script_generation.txt",
         "4_thumbnail": "4_thumbnail.txt",
         "5_seo": "5_seo.txt",
