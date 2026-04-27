@@ -91,13 +91,41 @@ def get_project_dir(id: str) -> Path:
     return project_dir
 
 
+def _maybe_migrate_pipeline_step_order(meta: dict) -> bool:
+    """
+    Older meta used: 4=thumb, 4.1, 4.5=script, 7=SEO, 8=final.
+    New order: 4=script, 5=audio, 6=edit, 7/7.1=thumb, 8=SEO, 9=final.
+    If step_schema is 2, no migration. Otherwise rewrite current_step and set step_schema=2.
+    """
+    if meta.get("step_schema") == 2:
+        return False
+    try:
+        cs = meta.get("current_step", 1)
+        f = float(cs)
+    except (TypeError, ValueError):
+        meta["step_schema"] = 2
+        return True
+    m: dict = {4.1: 7.1, 4.5: 4.0, 7: 8.0, 8: 9.0}
+    if f in m:
+        meta["current_step"] = m[f]
+    elif abs(f - 4.0) < 1e-6:
+        # Old "Thumbnail" was 4; new 4 is "Script for recording" (was 4.5)
+        meta["current_step"] = 7.0
+    meta["step_schema"] = 2
+    return True
+
+
 def read_meta(id: str) -> dict:
     project_dir = get_project_dir(id)
     meta_path = project_dir / "meta.json"
     if not meta_path.exists():
         raise HTTPException(status_code=404, detail="Project meta not found")
     with open(meta_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        meta = json.load(f)
+    if _maybe_migrate_pipeline_step_order(meta):
+        with open(meta_path, "w", encoding="utf-8") as out:
+            json.dump(meta, out, indent=2, ensure_ascii=False)
+    return meta
 
 
 def write_meta(id: str, meta: dict) -> None:
@@ -227,6 +255,7 @@ def create_project(body: CreateProjectBody):
         "id": folder_name,
         "title": body.title,
         "current_step": 1,
+        "step_schema": 2,
         "image_provider": prov,
         "whisperx_align": True,
         "demucs_vocals": False,
@@ -361,8 +390,8 @@ def reset_step(id: str, body: StepBody):
     return meta
 
 
-# Order matters: 3.5+1 as float was 4.5 in Python, skipping 4 and 4.1.
-_PIPELINE_STEPS: tuple[float, ...] = (1, 2, 3, 3.5, 4, 4.1, 4.5, 5, 6, 7, 8)
+# 4 = script for recording, 7/7.1 = thumbnails (after 6 = assemble and edit), 8 = SEO, 9 = final
+_PIPELINE_STEPS: tuple[float, ...] = (1, 2, 3, 3.5, 4, 5, 6, 7, 7.1, 8, 9)
 
 
 def _default_next_current_step(completed: float) -> float:
@@ -615,12 +644,13 @@ def image_check(id: str):
     return {"present": present, "missing": missing, "total_expected": total_expected}
 
 
-@app.post("/api/projects/{id}/replace-image/{image_name}")
+@app.post("/api/projects/{id}/replace-image/{image_name:path}")
 async def replace_image(id: str, image_name: str, file: UploadFile = File(...)):
     project_dir = get_project_dir(id)
     images_dir = project_dir / "images"
     images_dir.mkdir(exist_ok=True)
-    dest = images_dir / image_name
+    # Only basename: ignore path segments so clients never write outside images/
+    dest = images_dir / Path(str(image_name)).name
     contents = await file.read()
     with open(dest, "wb") as f:
         f.write(contents)

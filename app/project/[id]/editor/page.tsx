@@ -77,6 +77,17 @@ function timelineSnapThresholdSec(totalDuration: number): number {
 const EXPORT_W = 1920;
 const EXPORT_H = 1080;
 
+/** `segments.json` may store `1.png` or `images/1.png`; API expects basename only. */
+function imageFileBasename(image: string): string {
+  const s = image.trim();
+  const noPrefix = s.startsWith('images/') || s.startsWith('images\\') ? s.replace(/^images[/\\]/i, '') : s;
+  return noPrefix.split(/[/\\]/).filter(Boolean).pop() || noPrefix;
+}
+
+function imagePathForFileApi(image: string): string {
+  return `images/${imageFileBasename(image)}`;
+}
+
 function letterboxRect(
   iw: number,
   ih: number,
@@ -146,6 +157,8 @@ export default function EditorPage() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const addInputRef = useRef<HTMLInputElement>(null);
+  /** Synchronous target for replace; must be set in the same user gesture as file input .click() (avoids null + browser picker quirks). */
+  const replaceTargetSegmentIdRef = useRef<number | null>(null);
   const [replacingSegmentId, setReplacingSegmentId] = useState<number | null>(null);
   const [selectedSegmentId, setSelectedSegmentId] = useState<number | null>(null);
   const [movingSegmentId, setMovingSegmentId] = useState<number | null>(null);
@@ -339,7 +352,7 @@ export default function EditorPage() {
     const total = segments.length;
     segments.forEach((seg) => {
       const img = new Image();
-      const path = seg.image.startsWith('images/') ? seg.image : `images/${seg.image}`;
+      const path = imagePathForFileApi(seg.image);
       img.onload = () => {
         images[seg.segment_id.toString()] = img;
         loaded += 1;
@@ -807,36 +820,65 @@ export default function EditorPage() {
             style={{ display: 'none' }}
             onChange={async (e) => {
               const file = e.target.files?.[0];
-              if (!file || replacingSegmentId === null) return;
+              const targetId = replaceTargetSegmentIdRef.current;
+              replaceTargetSegmentIdRef.current = null;
+              if (!file) return;
+              if (targetId === null) {
+                if (replaceInputRef.current) replaceInputRef.current.value = '';
+                return;
+              }
               const seg =
-                segments.find(s => s.segment_id === replacingSegmentId) ??
-                parkedSegments.find(s => s.segment_id === replacingSegmentId);
-              if (!seg) return;
-              const imageName = seg.image;
+                segments.find(s => s.segment_id === targetId) ??
+                parkedSegments.find(s => s.segment_id === targetId);
+              if (!seg) {
+                showToast('Could not find the selected scene for replace.', 'error');
+                if (replaceInputRef.current) replaceInputRef.current.value = '';
+                return;
+              }
+              const imageName = imageFileBasename(seg.image);
               const formData = new FormData();
               formData.append('file', file);
               const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8050';
-              await fetch(`${apiBase}/api/projects/${encodeProjectIdForPath(id)}/replace-image/${encodeURIComponent(imageName)}`, {
-                method: 'POST',
-                body: formData,
-              });
-              const newUrl = `${fileUrl(id, `images/${imageName}`)}?t=${Date.now()}`;
+              let res: Response;
+              try {
+                res = await fetch(
+                  `${apiBase}/api/projects/${encodeProjectIdForPath(id)}/replace-image/${encodeURIComponent(imageName)}`,
+                  { method: 'POST', body: formData }
+                );
+              } catch (err) {
+                showToast(err instanceof Error ? err.message : 'Network error while replacing image', 'error');
+                if (replaceInputRef.current) replaceInputRef.current.value = '';
+                return;
+              }
+              if (!res.ok) {
+                const errData = (await res.json().catch(() => ({}))) as { detail?: string };
+                showToast(
+                  typeof errData.detail === 'string' ? errData.detail : `Replace failed (${res.status})`,
+                  'error'
+                );
+                if (replaceInputRef.current) replaceInputRef.current.value = '';
+                return;
+              }
+              const pathForUrl = imagePathForFileApi(imageName);
+              const newUrl = `${fileUrl(id, pathForUrl)}?t=${Date.now()}`;
               saveToHistory();
               setSegments(prev =>
                 prev.map(s =>
-                  s.segment_id === replacingSegmentId
-                    ? { ...s, image: imageName }
-                    : s
+                  s.segment_id === targetId ? { ...s, image: imageName } : s
                 )
+              );
+              setParkedSegments(prev =>
+                prev.map(s => (s.segment_id === targetId ? { ...s, image: imageName } : s))
               );
               updateTotalDuration();
               const img = new Image();
               img.src = newUrl;
               img.onload = () => {
-                setPreloadedImages(prev => ({ ...prev, [replacingSegmentId.toString()]: img }));
+                setPreloadedImages(prev => ({ ...prev, [targetId.toString()]: img }));
               };
               setReplacingSegmentId(null);
               if (replaceInputRef.current) replaceInputRef.current.value = '';
+              autoSave();
             }}
           />
           <input
@@ -1333,6 +1375,8 @@ export default function EditorPage() {
               <span className="text-[color:var(--garden-text-soft)] text-xs">Scene {(segments.findIndex(s => s.segment_id === selectedSegmentId) + 1)} selected</span>
               <button
                 onClick={() => {
+                  if (selectedSegmentId === null) return;
+                  replaceTargetSegmentIdRef.current = selectedSegmentId;
                   setReplacingSegmentId(selectedSegmentId);
                   replaceInputRef.current?.click();
                 }}
@@ -1495,7 +1539,7 @@ export default function EditorPage() {
                   window.addEventListener('mousemove', onMove);
                   window.addEventListener('mouseup', onUp);
                 };
-                const imgPath = seg.image.startsWith('images/') ? seg.image : `images/${seg.image}`;
+                const imgPath = imagePathForFileApi(seg.image);
                 const isUnmatched = seg.matched === false;
                 /** Only the selected clip gets active trim handles (avoids grabbing a neighbor's edge). */
                 const canTrimEdges = selectedSegmentId === seg.segment_id;
@@ -1834,7 +1878,7 @@ export default function EditorPage() {
                     >
                       <div className="flex-1 flex items-center gap-2 pl-3 pr-3 min-w-0">
                         <img
-                          src={fileUrl(id, `images/${seg.image}`)}
+                          src={fileUrl(id, imagePathForFileApi(seg.image))}
                           alt=""
                           className="object-cover flex-shrink-0"
                           width={32}

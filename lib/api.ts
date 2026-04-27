@@ -334,6 +334,7 @@ export type ThumbnailPromptVariant = {
   variant: number;
   title: string;
   grok_prompt: string;
+  review?: string;
 };
 
 export async function generateThumbnailPrompts(id: string): Promise<{ prompts: ThumbnailPromptVariant[] }> {

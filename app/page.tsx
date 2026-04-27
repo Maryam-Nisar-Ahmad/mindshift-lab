@@ -221,7 +221,7 @@ export default function Page() {
                   {project.title}
                 </div>
                 <span className="text-sm font-medium" style={{ color: 'var(--garden-accent)' }}>
-                  Step {((project.current_step ?? 0) + 1)}/7
+                  Step {((project.current_step ?? 0) + 1)}/11
                 </span>
                 {project.mtime != null && (
                   <div className="mt-1 text-sm" style={{ color: 'var(--garden-text-soft)' }}>

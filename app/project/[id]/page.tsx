@@ -25,13 +25,13 @@ const STEPS = [
   { num: 2, name: 'Script Generation' },
   { num: 3, name: 'MidJourney Prompts' },
   { num: 3.5, name: 'Image Check' },
-  { num: 4, name: 'Thumbnail' },
-  { num: 4.1, name: 'Thumbnail Review' },
-  { num: 4.5, name: 'Script for Recording' },
+  { num: 4, name: 'Script for Recording' },
   { num: 5, name: 'Audio Processing' },
   { num: 6, name: 'Assemble and Edit' },
-  { num: 7, name: 'SEO Description' },
-  { num: 8, name: 'Final Review' },
+  { num: 7, name: 'Thumbnail' },
+  { num: 7.1, name: 'Thumbnail Review' },
+  { num: 8, name: 'SEO Description' },
+  { num: 9, name: 'Final Review' },
 ];
 
 /** Per-step accent for left stripe + soft tint (cycles). */
@@ -342,13 +342,13 @@ export default function ProjectPage() {
     }, 900);
   }, []);
   useEffect(() => {
-    if (!id || displayStep !== 4) return;
+    if (!id || displayStep !== 7) return;
     getThumbnailPrompts(id)
       .then((p) => setThumbPrompts(Array.isArray(p) && p.length > 0 ? p : null))
       .catch(() => setThumbPrompts(null));
   }, [id, displayStep]);
   useEffect(() => {
-    if (id && displayStep === 4) {
+    if (id && displayStep === 7) {
       Promise.all([
         getPromptTemplate('4_thumbnail').then((r: { content?: string }) => r?.content ?? ''),
         fetch(fileUrl(id, 'script.txt'))
@@ -380,14 +380,14 @@ export default function ProjectPage() {
     }
   }, [id]);
   useEffect(() => {
-    if (id && displayStep === 4.1) {
+    if (id && displayStep === 7.1) {
       getPromptTemplate('8_thumbnail_review_prompt')
         .then((r: { content?: string }) => setThumbnailReviewPrompt(r?.content ?? ''))
         .catch(() => {});
     }
   }, [id, displayStep]);
   useEffect(() => {
-    if (!id || (displayStep !== 7 && displayStep !== 8)) return;
+    if (!id || (displayStep !== 8 && displayStep !== 9)) return;
     getSeoData(id)
       .then((data: SeoDataPayload) => {
         setSeoYoutubeDescription(data.description ?? '');
@@ -400,7 +400,7 @@ export default function ProjectPage() {
       .catch(() => {});
   }, [id, displayStep]);
   useEffect(() => {
-    if (id && displayStep === 4.5) {
+    if (id && displayStep === 4) {
       fetch(fileUrl(id, 'script.txt'))
         .then((r) => r.text())
         .then(setStep4_5Script)
@@ -411,7 +411,7 @@ export default function ProjectPage() {
     }
   }, [id, displayStep, showToast]);
   useEffect(() => {
-    if (id && displayStep === 7) {
+    if (id && displayStep === 8) {
       Promise.all([
         getPromptTemplate('5_seo').then((r: { content?: string }) => r?.content ?? ''),
         fetch(fileUrl(id, 'script.txt')).then((r) => r.text()).catch(() => ''),
@@ -675,7 +675,7 @@ export default function ProjectPage() {
         </div>
       )}
 
-      {(project?.current_step ?? 0) > 8 && (
+      {(project?.current_step ?? 0) > 9 && (
         <div
           className="fun-display sticky top-14 z-10 mx-6 mt-2 flex justify-between items-center rounded-2xl border-2 p-4 font-bold shadow-lg"
           style={{
@@ -700,7 +700,7 @@ export default function ProjectPage() {
             {project.title}
           </h1>
           <p className="fun-display mt-3 text-sm sm:text-base font-medium" style={{ color: 'var(--garden-text-soft)' }}>
-            {(project?.current_step ?? 0) > 8
+            {(project?.current_step ?? 0) > 9
               ? '🎉 All steps complete — celebrate your video!'
               : heroStepIndex >= 0
                 ? `You're on step ${heroStepIndex + 1} of ${STEPS.length} — little wins add up!`
@@ -1047,7 +1047,7 @@ export default function ProjectPage() {
                       )}
                     </>
                   )}
-                  {num === 4 && (
+                  {num === 7 && (
                     <>
                       <div className="mt-4 rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: 'var(--garden-surface)', borderLeftColor: 'var(--garden-accent)', color: 'var(--garden-text)' }}>
                         <button
@@ -1116,35 +1116,73 @@ export default function ProjectPage() {
                         </button>
                         {thumbPrompts && thumbPrompts.length > 0 && (
                           <div className="space-y-4">
-                            {thumbPrompts.map((tp) => (
-                              <div
-                                key={tp.variant}
-                                className="rounded-lg border p-3"
-                                style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-surface)' }}
-                              >
-                                <div className="flex justify-between items-start gap-2 mb-2">
-                                  <span className="text-xs font-bold" style={{ color: 'var(--garden-accent)' }}>
-                                    Variant {tp.variant}: {tp.title}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="text-xs px-2 py-1 rounded"
-                                    style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text)' }}
-                                    onClick={() => {
-                                      navigator.clipboard.writeText(tp.grok_prompt).then(
-                                        () => showToast('Copied', 'success'),
-                                        () => showToast('Copy failed', 'error')
-                                      );
-                                    }}
-                                  >
-                                    Copy prompt
-                                  </button>
+                            {thumbPrompts.map((tp) => {
+                              const ctrLevel = tp.review
+                                ? tp.review.match(/CTR Potential:\s*(HIGH|MEDIUM|LOW)/i)?.[1]?.toUpperCase() ?? null
+                                : null;
+                              const ctrColor =
+                                ctrLevel === 'HIGH'
+                                  ? { bg: 'color-mix(in srgb, #16a34a 15%, var(--garden-card))', text: '#16a34a', border: '#16a34a' }
+                                  : ctrLevel === 'MEDIUM'
+                                  ? { bg: 'color-mix(in srgb, #d97706 15%, var(--garden-card))', text: '#d97706', border: '#d97706' }
+                                  : ctrLevel === 'LOW'
+                                  ? { bg: 'color-mix(in srgb, #dc2626 15%, var(--garden-card))', text: '#dc2626', border: '#dc2626' }
+                                  : null;
+                              return (
+                                <div
+                                  key={tp.variant}
+                                  className="rounded-lg border p-3"
+                                  style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-surface)' }}
+                                >
+                                  <div className="flex justify-between items-start gap-2 mb-2">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="text-xs font-bold" style={{ color: 'var(--garden-accent)' }}>
+                                        Variant {tp.variant}: {tp.title}
+                                      </span>
+                                      {ctrLevel && ctrColor && (
+                                        <span
+                                          className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+                                          style={{ backgroundColor: ctrColor.bg, color: ctrColor.text, border: `1px solid ${ctrColor.border}` }}
+                                        >
+                                          {ctrLevel} CTR
+                                        </span>
+                                      )}
+                                    </div>
+                                    <button
+                                      type="button"
+                                      className="text-xs px-2 py-1 rounded shrink-0"
+                                      style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text)' }}
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(tp.grok_prompt).then(
+                                          () => showToast('Copied', 'success'),
+                                          () => showToast('Copy failed', 'error')
+                                        );
+                                      }}
+                                    >
+                                      Copy prompt
+                                    </button>
+                                  </div>
+                                  <p className="font-mono text-xs whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--garden-text-soft)' }}>
+                                    {tp.grok_prompt}
+                                  </p>
+                                  {tp.review && (
+                                    <div
+                                      className="mt-2 rounded p-2 text-xs leading-relaxed"
+                                      style={{
+                                        backgroundColor: ctrColor
+                                          ? ctrColor.bg
+                                          : 'color-mix(in srgb, var(--garden-accent) 8%, var(--garden-surface))',
+                                        color: 'var(--garden-text-soft)',
+                                        borderLeft: `3px solid ${ctrColor ? ctrColor.border : 'var(--garden-accent)'}`,
+                                      }}
+                                    >
+                                      <span className="font-semibold" style={{ color: 'var(--garden-text)' }}>AI Review: </span>
+                                      {tp.review}
+                                    </div>
+                                  )}
                                 </div>
-                                <p className="font-mono text-xs whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--garden-text-soft)' }}>
-                                  {tp.grok_prompt}
-                                </p>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -1155,7 +1193,7 @@ export default function ProjectPage() {
                         style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                         onClick={() => {
                           if (!id) return;
-                          stepComplete(id, 4, 4.1)
+                          stepComplete(id, 7, 7.1)
                             .then(() => fetchProject())
                             .then(() => showToast('Step complete', 'success'))
                             .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'));
@@ -1165,7 +1203,7 @@ export default function ProjectPage() {
                       </button>
                     </>
                   )}
-                  {num === 4.1 && (
+                  {num === 7.1 && (
                     <>
                       <h2 className="mt-4 text-lg font-semibold" style={{ color: 'var(--garden-text)' }}>
                         Thumbnail Review
@@ -1191,7 +1229,7 @@ export default function ProjectPage() {
                         style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                         onClick={() => {
                           if (!id) return;
-                          stepComplete(id, 4.1, 4.5)
+                          stepComplete(id, 7.1, 8)
                             .then(() => fetchProject())
                             .then(() => showToast('Thumbnail review complete', 'success'))
                             .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'));
@@ -1201,7 +1239,7 @@ export default function ProjectPage() {
                       </button>
                     </>
                   )}
-                  {num === 4.5 && (
+                  {num === 4 && (
                     <>
                       <p className="mt-4 text-sm font-medium" style={{ color: 'var(--garden-accent)' }}>Your Recording Script</p>
                       <div className="mt-2 rounded-lg p-4 border-l-4 font-mono text-sm max-h-80 overflow-y-auto relative" style={{ backgroundColor: 'var(--garden-surface)', borderLeftColor: 'var(--garden-accent)', color: 'var(--garden-text)' }}>
@@ -1230,7 +1268,7 @@ export default function ProjectPage() {
                         style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
                         onClick={() => {
                           if (!id) return;
-                          stepComplete(id, 4.5, 5)
+                          stepComplete(id, 4, 5)
                             .then(() => fetchProject())
                             .then(() => showToast('Step complete', 'success'))
                             .catch((err) => showToast(err instanceof Error ? err.message : 'Failed', 'error'));
@@ -1417,7 +1455,7 @@ export default function ProjectPage() {
                       </button>
                     </>
                   )}
-                  {num === 7 && (
+                  {num === 8 && (
                     <>
                       <div className="mt-4 rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: 'var(--garden-surface)', borderLeftColor: 'var(--garden-accent)', color: 'var(--garden-text)' }}>
                         <button
@@ -1493,7 +1531,7 @@ export default function ProjectPage() {
                               deepseek_title_raw: deepseekTitleRaw,
                             };
                             saveSeoData(id, payload)
-                              .then(() => stepComplete(id, 7))
+                              .then(() => stepComplete(id, 8))
                               .then(() => {
                                 fetchProject();
                                 showToast('Saved', 'success');
@@ -1506,9 +1544,9 @@ export default function ProjectPage() {
                       </div>
                     </>
                   )}
-                  {num === 8 && (
+                  {num === 9 && (
                     <>
-                      {/* Final Review - Step 8 */}
+                      {/* Final Review */}
                       <div className="space-y-6">
                         <h3 className="text-lg font-semibold" style={{ color: 'var(--garden-text)' }}>
                           Final Review
@@ -1663,7 +1701,7 @@ export default function ProjectPage() {
                               deepseek_title_raw: deepseekTitleRaw,
                             };
                             saveSeoData(id, payload)
-                              .then(() => stepComplete(id, 8))
+                              .then(() => stepComplete(id, 9))
                               .then(() => {
                                 fetchProject();
                                 showToast('Final review saved!', 'success');
@@ -1678,7 +1716,7 @@ export default function ProjectPage() {
                       </div>
                     </>
                   )}
-                  {num !== 1 && num !== 2 && num !== 3 && num !== 3.5 && num !== 4 && num !== 4.1 && num !== 4.5 && num !== 5 && num !== 6 && num !== 7 && num !== 8 && <div className="h-24 rounded-xl border border-dashed" style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-well)' }} />}
+                  {num !== 1 && num !== 2 && num !== 3 && num !== 3.5 && num !== 4 && num !== 5 && num !== 6 && num !== 7 && num !== 7.1 && num !== 8 && num !== 9 && <div className="h-24 rounded-xl border border-dashed" style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-well)' }} />}
                 </div>
               )}
 
