@@ -533,10 +533,12 @@ async def _mj_fetch_parsed_batch(
             'Within this batch, vary shot scale so you never output three consecutive identical types '
             '(wide-establishing vs medium vs close-up vs abstract/symbol). Honor ACT mood from STYLE SPEC.\n',
             'Generate one detailed self-contained image prompt for Grok for each narration segment below.\n',
+            'CRITICAL — STATELESS RENDERING: Each prompt is sent to Grok in a completely separate session with ZERO memory of any other prompt. Grok does not know what [CHARACTER_A] or [CHARACTER_B] look like unless you describe them fully in THIS prompt. Grok does not know the art style unless you state it in THIS prompt. Never write "[CHARACTER_B], as described" or "the same character." Never assume context from previous segments.\n',
+            'For EVERY prompt where [CHARACTER_A] appears: include "young woman, brown hair messy bun, bright [REDACTED], [REDACTED], [REDACTED]" in the character description. For EVERY prompt where [CHARACTER_B] appears: include "young man, [REDACTED], [REDACTED], grey-green joggers, [REDACTED]" in the character description. Do this for EVERY segment — not just the first one.\n',
             'Use SEGMENT [N]: headers; each block must include GROK_IMAGE_PROMPT as one flowing paragraph (no URLs, no CLI flags, no scene numbers in the prompt text).\n',
             'Also include TARGET_IMAGE: one concise single-line visual intent (8-18 words) describing exactly what best-match image should show.\n',
-            'Brand-critical: every prompt must lock the same MindShift Lab on-screen identity as the Style Spec — thin outline 2D anime with soft cel-shading, muted sets with clear character color reads, act-matched lighting (cool clinical / warm golden). Not generic anime wallpaper; not photoreal; not 3D game render.\n',
-            'Rich specifics in one paragraph: foreground action; midground context; background depth; 3+ props with named materials; ONE motivated light (direction + color temperature); shot scale; [CHARACTER_A]/[CHARACTER_B] anchor phrases verbatim when they appear; mandatory FINAL LINE from the Style Spec at the end.\n',
+            'Brand-critical: every prompt must re-state the MindShift Lab on-screen identity — thin outline 2D anime with soft cel-shading, muted sets with clear character color reads, act-matched lighting (cool clinical / warm golden). Not generic anime wallpaper; not photoreal; not 3D game render.\n',
+            'Rich specifics in one paragraph: foreground action; midground context; background depth; 3+ props with named materials; ONE motivated light (direction + color temperature); shot scale; full character description verbatim if they appear; mandatory FINAL LINE from the Style Spec at the end.\n',
             'In your output, use SEGMENT [N]: headers where N matches the number in each --- SEGMENT N --- line below.\n',
         ]
     else:
@@ -746,8 +748,13 @@ async def regenerate_single_prompt(segment_text, segment_id, image_provider: str
     client = AsyncOpenAI(api_key=os.getenv('DEEPSEEK_API_KEY'), base_url='https://api.deepseek.com')
     if is_grok:
         user_message = (
-            "VIDEO CONTEXT: Single-segment regeneration. Illustrate THIS segment’s words with full congruency; "
+            "VIDEO CONTEXT: Single-segment regeneration. Illustrate THIS segment words with full congruency; "
             "pick shot scale (wide/medium/close/abstract) appropriate to the beat and STYLE SPEC ACT.\n\n"
+            "CRITICAL - STATELESS RENDERING: This prompt is sent to Grok in an isolated session with zero memory. "
+            "If [CHARACTER_A] appears: include young woman, brown hair messy bun, bright [REDACTED], [REDACTED], [REDACTED] verbatim. "
+            "If [CHARACTER_B] appears: include young man, [REDACTED], [REDACTED], grey-green joggers, [REDACTED] verbatim. "
+            "Re-state the MindShift Lab art style (flat 2D anime, thin outlines, soft cel shading) in the prompt. "
+            "End with the mandatory FINAL LINE from the Style Spec.\n\n"
             f"--- SEGMENT {segment_id} ---\n\n{segment_text}"
         )
     else:
