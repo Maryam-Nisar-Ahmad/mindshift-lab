@@ -197,6 +197,7 @@ export default function EditorPage() {
   type AssemblyQc = {
     pass: boolean;
     match_pct: number;
+    timing_pct: number;
     matched: number;
     total: number;
     issues: string[];
@@ -1417,7 +1418,10 @@ export default function EditorPage() {
                 {assemblyQc.pass ? '✓' : '⚠'}
               </span>
               <span className="font-semibold" style={{ color: 'var(--garden-text)' }}>
-                Sync Quality: {assemblyQc.match_pct}% matched ({assemblyQc.matched}/{assemblyQc.total} scenes)
+                Sync Quality: {assemblyQc.timing_pct ?? assemblyQc.match_pct}% good timing
+                <span className="font-normal text-[10px] ml-1" style={{ color: 'var(--garden-text-soft)' }}>
+                  ({assemblyQc.matched}/{assemblyQc.total} NW-aligned)
+                </span>
               </span>
               {assemblyQc.problem_scenes.length > 0 && (
                 <span className="ml-1" style={{ color: 'var(--garden-warning)' }}>

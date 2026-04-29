@@ -364,9 +364,24 @@ def compute_segment_starts(
             # remaining violations.
             if st < last_matched_end_time:
                 st = round(last_matched_end_time + 0.05, 3)
+
+            # ── Critical cursor-advance fix ──────────────────────────────────
+            # `end_time` only reaches the last NW-matched word.  If NW matched
+            # only the FIRST half of a segment's words, `end_time` is well
+            # before the segment actually finishes in the audio.  The NEXT
+            # segment's window would then overlap with the current segment's
+            # unmatched tail, making it start early → "image before audio."
+            #
+            # Solution: always advance the cursor to at least
+            #   start_time + 70% of the segment's proportional audio span.
+            # This ensures the next window begins AFTER the current segment
+            # has (mostly) finished being spoken.
+            est_duration = (len(seg_word_list) / total_script_words) * total_duration
+            cursor_time = max(end_time, st + est_duration * 0.70)
+
             # Only advance the time cursor when the match is in a sane range.
             if abs(st - prop_time) <= TIME_SLACK_SECONDARY + 2:
-                last_matched_end_time = max(last_matched_end_time, end_time)
+                last_matched_end_time = max(last_matched_end_time, cursor_time)
             results.append(
                 {
                     "segment_id": segment_id,

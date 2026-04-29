@@ -19,6 +19,69 @@ def _audio_timeline_json_path(project_dir: Path) -> Path:
     )
 
 
+_MIN_ACCEPTABLE_DURATION = 0.5   # seconds; shorter than this is suspicious
+_CLUSTER_THRESHOLD = 3           # run of N consecutive short scenes → redistribute
+
+
+def _fix_short_duration_clusters(segments: list, total_duration: float) -> list:
+    """
+    Find runs of ≥ _CLUSTER_THRESHOLD consecutive scenes whose duration is
+    < _MIN_ACCEPTABLE_DURATION and redistribute their start times by linear
+    interpolation between the enclosing long-duration anchors.
+
+    After redistribution the segment `end` values are recomputed.
+    """
+    n = len(segments)
+    if n == 0:
+        return segments
+
+    # Rebuild durations from current start values (ends are start[i+1] or total_duration).
+    def duration(i: int) -> float:
+        s = float(segments[i].get("start", 0) or 0)
+        e = float(segments[i + 1]["start"]) if i + 1 < n else total_duration
+        return e - s
+
+    changed = True
+    while changed:
+        changed = False
+        i = 0
+        while i < n:
+            if duration(i) < _MIN_ACCEPTABLE_DURATION:
+                # Find the full extent of the short run.
+                j = i
+                while j < n and duration(j) < _MIN_ACCEPTABLE_DURATION:
+                    j += 1
+                run_len = j - i
+                if run_len >= _CLUSTER_THRESHOLD:
+                    # Anchor before the run.
+                    prev_start = float(segments[i - 1]["start"]) if i > 0 else 0.0
+                    # Anchor after the run (first long scene past j-1).
+                    next_start = (
+                        float(segments[j]["start"]) if j < n else total_duration
+                    )
+                    span = next_start - prev_start
+                    # Distribute evenly across prev+1 … j-1 (leave prev and next untouched).
+                    slots = run_len + 1  # gaps between prev_anchor and next_anchor
+                    for k, idx in enumerate(range(i, j), start=1):
+                        new_t = round(prev_start + span * k / slots, 3)
+                        segments[idx]["start"] = new_t
+                        segments[idx]["matched"] = False
+                        segments[idx]["method"] = "cluster_interpolated"
+                    changed = True
+            i += 1
+
+    # Recompute end values after redistribution.
+    for i in range(n):
+        if i < n - 1:
+            segments[i]["end"] = round(float(segments[i + 1]["start"]), 3)
+        else:
+            segments[i]["end"] = round(float(total_duration or 0), 3)
+        if segments[i]["end"] <= segments[i]["start"]:
+            segments[i]["end"] = round(float(segments[i]["start"] or 0) + 1.0, 3)
+
+    return segments
+
+
 def map_segments_to_timestamps(project_id, project_dir) -> list:
     project_dir = Path(project_dir)
     mj_path = project_dir / "mj_prompts.json"
@@ -62,6 +125,14 @@ def map_segments_to_timestamps(project_id, project_dir) -> list:
         if result[i]["end"] <= result[i]["start"]:
             result[i]["end"] = round(float(result[i]["start"] or 0) + 4.0, 3)
 
+    # ── Post-process: fix clusters of very-short-duration scenes ─────────────
+    # When the NW places multiple consecutive segments at nearly the same
+    # audio timestamp their durations become 0.02–0.05 s.  Even though the NW
+    # "succeeded" for each, the positions are unreliable.  Redistribute them
+    # by linearly interpolating between the last correctly-long scene before
+    # the cluster and the first correctly-long scene after it.
+    result = _fix_short_duration_clusters(result, total_duration)
+
     out_path = project_dir / "segments.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
@@ -97,7 +168,8 @@ def validate_assembly(segments: list, total_duration: float) -> dict:
     """
     Run quality checks on assembled segments.  Returns a dict with:
     - pass: bool  (True when the assembly looks correct enough to export)
-    - match_pct: float
+    - match_pct: float  — fraction whose timing came from NW (not fallback/interpolation)
+    - timing_pct: float — fraction with acceptable duration (> 0.5 s)
     - issues: list[str]  (human-readable warnings)
     - problem_scenes: list[int]  (segment_ids with suspicious timing)
     """
@@ -106,15 +178,23 @@ def validate_assembly(segments: list, total_duration: float) -> dict:
     n = len(segments)
 
     if n == 0:
-        return {"pass": False, "match_pct": 0.0, "issues": ["No segments"], "problem_scenes": []}
+        return {
+            "pass": False, "match_pct": 0.0, "timing_pct": 0.0,
+            "issues": ["No segments"], "problem_scenes": [],
+        }
 
     matched = sum(1 for s in segments if s.get("matched"))
     match_pct = round(matched / n * 100, 1)
 
+    # NW match rate is a signal of text-to-audio alignment quality.
     if match_pct < 80:
-        issues.append(f"Only {match_pct}% of scenes matched to audio — sync will be poor.")
+        issues.append(
+            f"Only {match_pct}% of scenes were NW-aligned to audio — overall sync may be poor."
+        )
     elif match_pct < 95:
-        issues.append(f"{match_pct}% of scenes matched — a few scenes may be slightly off.")
+        issues.append(
+            f"{match_pct}% NW-aligned — remaining scenes use proportional/interpolated timing."
+        )
 
     durations = []
     for s in segments:
@@ -152,10 +232,16 @@ def validate_assembly(segments: list, total_duration: float) -> dict:
                 f"({drift:.2f}s drift)."
             )
 
-    ok = match_pct >= 90 and len(problem_scenes) == 0
+    good_timing = sum(1 for d in durations if d >= 0.5)
+    timing_pct = round(good_timing / n * 100, 1)
+
+    ok = timing_pct >= 95 and len(problem_scenes) == 0
     return {
         "pass": ok,
+        # match_pct: % whose start came from NW text-alignment (not fallback)
         "match_pct": match_pct,
+        # timing_pct: % with acceptable duration — the real quality signal
+        "timing_pct": timing_pct,
         "matched": matched,
         "total": n,
         "issues": issues,
