@@ -222,6 +222,10 @@ export default function EditorPage() {
     }
   }, [id]);
 
+  const [resyncPending, setResyncPending] = useState(false);
+
+  // resyncPending is set to true while the re-assembly API call is in flight
+
   const [subtitleGenPending, setSubtitleGenPending] = useState(false);
   const subtitleGenLockRef = useRef(false);
   const hasSubtitlesRef = useRef(hasSubtitles);
@@ -689,6 +693,35 @@ export default function EditorPage() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [performUndo, performRedo]);
+
+  const runResyncImages = useCallback(async () => {
+    if (!id || resyncPending) return;
+    setResyncPending(true);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8050';
+      const res = await fetch(
+        `${apiBase}/api/projects/${encodeProjectIdForPath(id)}/assemble`,
+        { method: 'POST' },
+      );
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({ detail: 'Assembly failed' }));
+        showToast((errBody as { detail?: string }).detail ?? 'Assembly failed', 'error');
+        return;
+      }
+      const newSegs = (await res.json()) as Segment[];
+      if (Array.isArray(newSegs) && newSegs.length > 0) {
+        saveToHistory();
+        setSegments(newSegs);
+        updateTotalDuration(newSegs);
+        showToast('Images re-synced to audio ✓', 'success');
+        void runValidateAssembly();
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Re-sync failed', 'error');
+    } finally {
+      setResyncPending(false);
+    }
+  }, [id, resyncPending, showToast, saveToHistory, updateTotalDuration, runValidateAssembly]);
 
   const autoSave = useCallback(() => {
     if (!id) return;
@@ -1391,12 +1424,25 @@ export default function EditorPage() {
                   — {assemblyQc.problem_scenes.length} problem scene{assemblyQc.problem_scenes.length > 1 ? 's' : ''}
                 </span>
               )}
-              <button
-                onClick={(e) => { e.stopPropagation(); void runValidateAssembly(); }}
-                className="ml-auto text-xs px-2 py-0.5 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)]"
-              >
-                Re-check
-              </button>
+              <div className="ml-auto flex items-center gap-1">
+                <button
+                  type="button"
+                  disabled={resyncPending}
+                  onClick={(e) => { e.stopPropagation(); void runResyncImages(); }}
+                  title="Re-run alignment and update all image positions from audio"
+                  className="text-xs px-2 py-0.5 rounded border disabled:opacity-50"
+                  style={{ borderColor: 'var(--garden-accent)', color: 'var(--garden-accent)', background: 'transparent' }}
+                >
+                  {resyncPending ? 'Re-syncing…' : '↺ Re-sync Images'}
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); void runValidateAssembly(); }}
+                  className="text-xs px-2 py-0.5 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)]"
+                >
+                  Re-check
+                </button>
+              </div>
               <span style={{ color: 'var(--garden-text-soft)' }}>{assemblyQcOpen ? '▲' : '▼'}</span>
             </div>
             {assemblyQcOpen && (

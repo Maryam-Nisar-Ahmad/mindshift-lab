@@ -1,24 +1,39 @@
 """
-Align MJ prompt segments to ASR words.
+Time-first segment alignment.
 
-Strategy (in priority order for every segment)
------------------------------------------------
-1. Global NW   – when the full script × audio grid fits the cell budget (short videos).
-2. Per-segment local NW inside a proportional window  – PRIMARY method for long videos.
-   Each segment gets its own search window *centred on where it should appear* in the
-   audio based on its fractional position in the full script.  This is completely
-   independent of whether earlier segments matched, so cascade failures are impossible.
-3. Fuzzy first-word probe inside the same window  – secondary fallback.
-4. Proportional-time estimate  – last resort; far more accurate than "uniform over the
-   whole video" because it uses the segment's actual script-word offset.
-5. Anchor interpolation post-pass  – remaining unmatched segments are placed on a
-   straight line between the nearest preceding and following matched anchors.
+Core insight
+------------
+Previous versions searched ±200 WORDS around the proportional estimate.  For a
+14-minute / 2 156-word audio that window spans ≈78 seconds — wide enough for the
+NW to accidentally match Scene 6 at audio time 50 s instead of the correct 21 s,
+causing a 44-second duration gap and all downstream scenes being wrong.
+
+Professional tools (CapCut, Descript, Kapwing) use TIME-proximity as the primary
+constraint and text as a refinement:
+
+  1. PRIMARY  – NW inside ± TIME_SLACK_PRIMARY (±6 s) of the proportional estimate.
+               A 12-second window cannot produce false matches far from the expected
+               position.  min_match_ratio is lowered to 0.15 because the tight window
+               already prevents false positives.
+
+  2. SECONDARY – NW inside ± TIME_SLACK_SECONDARY (±20 s) for segments where the
+                narrator paused, repeated, or deviated from the exact script pace.
+
+  3. FALLBACK  – use the proportional time directly (accurate to ≈ ±1–3 s for a
+               constant-pace narration).  Far better than the old "uniform over the
+               whole video" approach.
+
+  4. ANCHOR INTERPOLATION – any remaining unmatched segments are placed on a line
+                            between the two nearest matched neighbours.
+
+All positions are monotonically non-decreasing; last_matched_end_time (in seconds)
+is used as the lower bound so that the time cursor automatically advances even
+between successful matches.
 """
 
 from __future__ import annotations
 
 import bisect
-import os
 import re
 from functools import lru_cache
 from rapidfuzz import fuzz
@@ -26,23 +41,15 @@ from rapidfuzz import fuzz
 from .word_timing import refine_word_timestamps
 
 
-# ── Global NW budget ──────────────────────────────────────────────────────────
-# Raised from 280k → 600k: handles medium-length videos (≤~35 segments) with the
-# full global pass; larger videos fall through to per-segment local NW.
-_MAX_NW_CELLS_DEFAULT = 600_000
-
-# Words of audio to search on each side of the proportional estimate.
-# 200 words ≈ 1.5–2 min of speech at typical pacing — generous enough to absorb
-# any accumulated drift from earlier segments.
-_WINDOW_SLACK = 200
+# ── Tuning constants ──────────────────────────────────────────────────────────
+# Tight primary window: prevents false matches far from the expected position.
+TIME_SLACK_PRIMARY = 6.0      # seconds on each side
+TIME_SLACK_SECONDARY = 20.0   # seconds on each side (wider fallback)
+MIN_MATCH_RATIO = 0.15        # fraction of segment words that must match in NW
+                               # (lower than before; tight window makes it safe)
 
 
-def _max_nw_cells() -> int:
-    try:
-        return max(50_000, int(os.getenv("ASSEMBLY_MAX_NW_CELLS", str(_MAX_NW_CELLS_DEFAULT))))
-    except (TypeError, ValueError):
-        return _MAX_NW_CELLS_DEFAULT
-
+# ── Token helpers ─────────────────────────────────────────────────────────────
 
 def _norm_token(t: str) -> str:
     t = (t or "").lower()
@@ -73,9 +80,7 @@ def _pair_score_normed(a: str, b: str) -> float:
     return -8.0
 
 
-def _pair_score(script_word: str, asr_word: str) -> float:
-    return _pair_score_normed(_norm_token(script_word), _norm_token(asr_word))
-
+# ── Needleman–Wunsch (used for small windows only) ───────────────────────────
 
 def _nw_align_script_to_asr(
     script_tokens: list[str],
@@ -83,9 +88,6 @@ def _nw_align_script_to_asr(
     gap_script: float = -5.0,
     gap_asr: float = -5.0,
 ) -> list[int | None]:
-    """
-    Global NW alignment.  Returns list[script_len]: ASR index or None for each token.
-    """
     S, W = len(script_tokens), len(asr_tokens)
     if S == 0:
         return []
@@ -135,13 +137,10 @@ def _nw_align_script_to_asr(
             i -= 1
         else:
             j -= 1
-
     return match_asr_idx
 
 
-def _exact_word_start(idx: int, words: list[dict]) -> float:
-    return round(float(words[idx]["start"]), 3)
-
+# ── Per-segment local NW ──────────────────────────────────────────────────────
 
 def _segment_local_nw(
     seg_words: list[str],
@@ -149,14 +148,11 @@ def _segment_local_nw(
     search_from: int,
     search_to: int,
     *,
-    min_match_ratio: float = 0.20,
+    min_match_ratio: float = MIN_MATCH_RATIO,
 ) -> tuple[float, bool, float, int]:
     """
-    Run NW between the full segment text and a bounded window [search_from, search_to).
-
-    Using the full segment text (not just the first N words) makes this much more
-    discriminative than a simple prefix probe, especially for short segments or those
-    that start with common words.
+    Run NW between the full segment text and words[search_from:search_to].
+    Returns (start_time, matched, match_ratio_pct, end_pos_exclusive).
     """
     search_to = min(search_to, len(words))
     if not seg_words or not words or search_from >= search_to:
@@ -168,96 +164,84 @@ def _segment_local_nw(
     matched_local = [j for j in match_idx if j is not None]
 
     if not matched_local:
-        return _exact_word_start(search_from, words), False, 0.0, search_from
+        return float(words[search_from]["start"]), False, 0.0, search_from
 
-    match_ratio = len(matched_local) / max(len(seg_words), 1)
-    if match_ratio < min_match_ratio:
+    ratio = len(matched_local) / max(len(seg_words), 1)
+    if ratio < min_match_ratio:
         return (
-            _exact_word_start(search_from, words),
+            float(words[search_from]["start"]),
             False,
-            round(match_ratio * 100, 2),
+            round(ratio * 100, 2),
             search_from,
         )
 
     actual_first = search_from + min(matched_local)
     actual_last = search_from + max(matched_local)
     return (
-        _exact_word_start(actual_first, words),
+        round(float(words[actual_first]["start"]), 3),
         True,
-        round(match_ratio * 100, 2),
+        round(ratio * 100, 2),
         min(actual_last + 1, len(words)),
     )
 
 
-def _fuzzy_probe_fallback(
+# ── Time window helper ────────────────────────────────────────────────────────
+
+def _try_time_window(
     seg_words: list[str],
     words: list[dict],
-    search_from: int,
-    search_to: int | None = None,
+    word_starts: list[float],
+    last_end_time: float,
+    prop_time: float,
+    t_slack: float,
+    total_duration: float,
+    method_name: str,
     *,
-    thresholds: tuple[tuple[int, int], ...] = ((6, 65), (4, 58), (3, 50)),
-) -> tuple[float, bool, float, int]:
+    use_cursor_lower_bound: bool = True,
+) -> tuple[float, bool, float, float, str] | None:
     """
-    Sliding-window fuzzy probe on the first N words.
-    Searches only within [search_from, search_to) when search_to is given.
-    Thresholds lowered from (78/72/68) → (65/58/50); the monotonicity cursor
-    and proportional window protect against false positives.
+    Attempt NW alignment within [max(last_end_time*, prop_time-t_slack),
+    prop_time+t_slack] converted to word indices.
+
+    *When use_cursor_lower_bound=False the cursor is ignored, which is
+    appropriate for the wider secondary pass so that an accumulated cursor
+    error cannot produce an empty search window for end-of-video scenes.
+
+    Returns (start_time, matched, ratio_pct, matched_end_time, method) or None.
     """
-    if not seg_words or not words:
-        return 0.0, False, 0.0, search_from
+    raw_from = prop_time - t_slack
+    if use_cursor_lower_bound:
+        t_from = max(last_end_time, raw_from)
+    else:
+        t_from = raw_from
+    t_to = min(total_duration, prop_time + t_slack)
 
-    end = search_to if search_to is not None else len(words)
-    best_ratio = 0.0
-    best_pos = search_from
-    matched = False
-    matched_probe_size = 0
+    if t_from >= t_to:
+        return None
 
-    for probe_size, threshold in thresholds:
-        if len(seg_words) < probe_size or len(words) < probe_size:
-            continue
-        probe_norm = _norm_token(" ".join(seg_words[:probe_size]))
-        cur_best_ratio = 0.0
-        cur_best_pos = search_from
+    w_from = bisect.bisect_left(word_starts, t_from)
+    # Include seg_words extra positions so the last word has space to match.
+    w_to = min(len(words), bisect.bisect_right(word_starts, t_to) + len(seg_words))
 
-        for idx in range(search_from, min(end - probe_size + 1, len(words) - probe_size + 1)):
-            window_str = " ".join(words[idx + k]["word"] for k in range(probe_size))
-            ratio = fuzz.ratio(probe_norm, _norm_token(window_str))
-            if ratio > cur_best_ratio:
-                cur_best_ratio = ratio
-                cur_best_pos = idx
-            if ratio >= 92:
-                break
+    if w_from >= w_to:
+        return None
 
-        if cur_best_ratio > best_ratio:
-            best_ratio = cur_best_ratio
-            best_pos = cur_best_pos
+    st, ok, ratio, end_pos = _segment_local_nw(seg_words, words, w_from, w_to)
+    if not ok:
+        return None
 
-        if cur_best_ratio >= threshold:
-            matched = True
-            matched_probe_size = probe_size
-            break
+    # end_time = end of the last matched word (advance the cursor past it).
+    last_idx = min(end_pos - 1, len(words) - 1)
+    end_time = float(words[last_idx]["end"]) if last_idx >= 0 else st
+    return (st, True, ratio, end_time, method_name)
 
-    if matched:
-        return (
-            float(words[best_pos]["start"]),
-            True,
-            float(best_ratio),
-            min(best_pos + matched_probe_size, len(words)),
-        )
 
-    return (
-        float(words[search_from]["start"]) if search_from < len(words) else 0.0,
-        False,
-        float(best_ratio),
-        search_from,
-    )
-
+# ── Anchor interpolation ──────────────────────────────────────────────────────
 
 def _interpolate_unmatched(results: list[dict], total_duration: float) -> None:
     """
-    For any remaining unmatched segments, replace their start time with a value
-    linearly interpolated between the nearest preceding and following matched anchors.
-    This is far more accurate than distributing over the whole video.
+    Replace proportional-fallback start times with linear interpolation between
+    the nearest preceding and following matched anchors.
     """
     n = len(results)
     for i in range(n):
@@ -280,13 +264,15 @@ def _interpolate_unmatched(results: list[dict], total_duration: float) -> None:
                 next_idx = j
                 break
 
-        gap_count = max(next_idx - prev_idx, 1)
+        gap = max(next_idx - prev_idx, 1)
         local_pos = i - prev_idx
         results[i]["start_time"] = round(
-            prev_time + (next_time - prev_time) * (local_pos / gap_count), 3
+            prev_time + (next_time - prev_time) * (local_pos / gap), 3
         )
         results[i]["method"] = "interpolated"
 
+
+# ── Main entry point ──────────────────────────────────────────────────────────
 
 def compute_segment_starts(
     mj_data: list,
@@ -294,31 +280,10 @@ def compute_segment_starts(
     total_duration: float,
 ) -> list[dict]:
     """
-    Core alignment function.  Returns one dict per segment:
+    Returns one dict per segment:
     { segment_id, start_time, matched, match_ratio, method }
     """
     words = refine_word_timestamps([dict(w) for w in audio_words_raw]) if audio_words_raw else []
-
-    # Pre-build a sorted list of word start times for O(log n) position look-ups.
-    word_starts: list[float] = [float(w.get("start", 0) or 0) for w in words]
-
-    # Cumulative script-word offsets: tells us how far into the script each segment is.
-    seg_word_offsets: list[int] = []
-    cumulative = 0
-    for seg in mj_data:
-        seg_word_offsets.append(cumulative)
-        cumulative += len((seg.get("segment_text") or "").strip().split())
-    total_script_words = max(cumulative, 1)
-
-    # Flat script tokens (for global NW when the grid fits).
-    flat_script: list[tuple[int, str]] = []
-    for seg in mj_data:
-        sid = seg.get("segment_id", 0)
-        for tok in (seg.get("segment_text") or "").strip().split():
-            flat_script.append((sid, tok))
-
-    script_tokens = [t[1] for t in flat_script]
-    asr_tokens = [str(w.get("word", "") or "") for w in words]
 
     if not words:
         return [
@@ -334,46 +299,35 @@ def compute_segment_starts(
             for i, seg in enumerate(mj_data)
         ]
 
-    # ── Global NW (only when the grid fits) ─────────────────────────────────
-    match_asr_idx: list[int | None] = []
-    global_nw_ok = False
-    if script_tokens and asr_tokens:
-        s_len, w_len = len(script_tokens), len(asr_tokens)
-        if s_len * w_len <= _max_nw_cells():
-            match_asr_idx = _nw_align_script_to_asr(script_tokens, asr_tokens)
-            global_nw_ok = True
-        else:
-            match_asr_idx = [None] * s_len
+    # Sorted list of word start times — used with bisect for fast time→index lookups.
+    word_starts: list[float] = [float(w.get("start", 0) or 0) for w in words]
 
-    # Flat index ranges per segment (needed to read global NW results).
-    flat_cursor = 0
-    per_row_flat_ranges: list[tuple[int, int]] = []
+    # Cumulative script-word offsets for proportional time estimation.
+    seg_word_offsets: list[int] = []
+    cumulative = 0
     for seg in mj_data:
-        sw = (seg.get("segment_text") or "").strip().split()
-        n = len(sw)
-        if n == 0:
-            per_row_flat_ranges.append((flat_cursor, flat_cursor - 1))
-        else:
-            per_row_flat_ranges.append((flat_cursor, flat_cursor + n - 1))
-            flat_cursor += n
+        seg_word_offsets.append(cumulative)
+        cumulative += len((seg.get("segment_text") or "").strip().split())
+    total_script_words = max(cumulative, 1)
 
     results: list[dict] = []
-    last_matched_cursor = 0   # highest ASR index consumed by a matched segment
+    # last_matched_end_time: end time (seconds) of the last matched segment's words.
+    # Used as the monotonic lower bound for the next segment's search window.
+    last_matched_end_time = 0.0
 
     for row_idx, seg in enumerate(mj_data):
         segment_id = seg.get("segment_id", 0)
-        lo, hi = per_row_flat_ranges[row_idx]
         seg_word_list = (seg.get("segment_text") or "").strip().split()
 
-        if lo > hi or not seg_word_list:
-            elapsed = seg_word_offsets[row_idx] / total_script_words
-            est = round(elapsed * total_duration, 3)
-            if results:
-                est = max(est, results[-1]["start_time"] + 0.5)
+        # Proportional time — the estimated audio position for this segment.
+        prop_time = (seg_word_offsets[row_idx] / total_script_words) * total_duration
+
+        if not seg_word_list:
+            t = max(last_matched_end_time + 0.05, prop_time)
             results.append(
                 {
                     "segment_id": segment_id,
-                    "start_time": est,
+                    "start_time": round(t, 3),
                     "matched": False,
                     "match_ratio": 0.0,
                     "method": "empty_segment_text",
@@ -381,108 +335,64 @@ def compute_segment_starts(
             )
             continue
 
-        # ── Compute per-segment proportional window ───────────────────────────
-        # Estimate where in the audio this segment should appear based on its
-        # fractional position in the full script text.  This is independent of
-        # whether any prior segment matched, so cascade failures cannot happen.
-        elapsed_frac = seg_word_offsets[row_idx] / total_script_words
-        prop_time = elapsed_frac * total_duration
-        prop_cursor = bisect.bisect_left(word_starts, prop_time)
-        prop_cursor = max(0, min(prop_cursor, len(words) - 1))
-
-        # The search window is centred on the proportional estimate but is
-        # clamped from below by last_matched_cursor (monotonicity guarantee).
-        search_from = max(last_matched_cursor, prop_cursor - _WINDOW_SLACK)
-        search_to = min(len(words), prop_cursor + _WINDOW_SLACK + len(seg_word_list))
-
-        # ── Stage 1: Global NW (short videos only) ───────────────────────────
-        if global_nw_ok:
-            matched_asr: list[int] = []
-            scores: list[float] = []
-            for fi in range(lo, hi + 1):
-                aj = match_asr_idx[fi] if fi < len(match_asr_idx) else None
-                if aj is not None:
-                    matched_asr.append(aj)
-                    if fi < len(script_tokens) and aj < len(asr_tokens):
-                        scores.append(_pair_score(script_tokens[fi], asr_tokens[aj]))
-            n_w = len(seg_word_list)
-            matched_ratio = len(matched_asr) / max(n_w, 1)
-            mean_pair = sum(scores) / len(scores) if scores else -99.0
-            use_nw = (
-                bool(matched_asr)
-                and matched_ratio >= 0.34
-                and mean_pair >= 5.0
-                and min(matched_asr) >= last_matched_cursor
-            )
-            if use_nw:
-                first_idx = min(matched_asr)
-                ratio_guess = min(100.0, max(55.0, 52.0 + mean_pair * 2.8))
-                results.append(
-                    {
-                        "segment_id": segment_id,
-                        "start_time": _exact_word_start(first_idx, words),
-                        "matched": True,
-                        "match_ratio": round(ratio_guess, 2),
-                        "method": "nw",
-                    }
-                )
-                last_matched_cursor = max(last_matched_cursor, max(matched_asr) + 1)
-                continue
-
-        # ── Stage 2: Local NW inside proportional window (primary for long videos) ──
-        if search_from < search_to:
-            st_lnw, ok_lnw, br_lnw, pos_lnw = _segment_local_nw(
-                seg_word_list, words, search_from, search_to
-            )
-            if ok_lnw:
-                results.append(
-                    {
-                        "segment_id": segment_id,
-                        "start_time": st_lnw,
-                        "matched": True,
-                        "match_ratio": round(br_lnw, 2),
-                        "method": "local_nw",
-                    }
-                )
-                last_matched_cursor = max(last_matched_cursor, pos_lnw)
-                continue
-        else:
-            br_lnw = 0.0
-
-        # ── Stage 3: Fuzzy probe inside the same window ──────────────────────
-        st_fz, ok_fz, br_fz, pos_fz = _fuzzy_probe_fallback(
-            seg_word_list, words, search_from, search_to
+        # ── Stage 1: NW inside the tight ±6-second window ────────────────────
+        m = _try_time_window(
+            seg_word_list, words, word_starts,
+            last_matched_end_time, prop_time,
+            TIME_SLACK_PRIMARY, total_duration,
+            "local_nw_primary",
         )
-        if ok_fz:
+
+        # ── Stage 2: NW inside the wide ±20-second window ────────────────────
+        # Do NOT clamp by last_matched_end_time here — a bad Stage-1 cursor
+        # advance must not shrink this window to nothing for later scenes.
+        if m is None:
+            m = _try_time_window(
+                seg_word_list, words, word_starts,
+                last_matched_end_time, prop_time,
+                TIME_SLACK_SECONDARY, total_duration,
+                "local_nw_secondary",
+                use_cursor_lower_bound=False,
+            )
+
+        if m is not None:
+            st, _, ratio, end_time, method = m
+            # If the secondary window found a match that is technically before
+            # the current cursor (because we disabled the cursor lower-bound),
+            # pin the start to just after the last match so the timeline stays
+            # monotonic.  The monotonicity post-pass will also catch any
+            # remaining violations.
+            if st < last_matched_end_time:
+                st = round(last_matched_end_time + 0.05, 3)
+            # Only advance the time cursor when the match is in a sane range.
+            if abs(st - prop_time) <= TIME_SLACK_SECONDARY + 2:
+                last_matched_end_time = max(last_matched_end_time, end_time)
             results.append(
                 {
                     "segment_id": segment_id,
-                    "start_time": st_fz,
+                    "start_time": st,
                     "matched": True,
-                    "match_ratio": round(br_fz, 2),
-                    "method": "fuzzy_only",
+                    "match_ratio": round(ratio, 2),
+                    "method": method,
                 }
             )
-            last_matched_cursor = max(last_matched_cursor, pos_fz)
             continue
 
-        # ── Stage 4: Proportional time estimate (last resort) ────────────────
-        # Do NOT advance last_matched_cursor; keep the best matched position
-        # so that later segments still search from the right neighbourhood.
-        prop_start = round(prop_time, 3)
-        if results:
-            prop_start = max(prop_start, results[-1]["start_time"] + 0.05)
+        # ── Stage 3: Proportional fallback ───────────────────────────────────
+        # Clamp by last_matched_end_time so we never go backwards, but do NOT
+        # advance the time cursor — a fallback position might be inaccurate.
+        fallback_t = round(max(last_matched_end_time + 0.05, prop_time), 3)
         results.append(
             {
                 "segment_id": segment_id,
-                "start_time": prop_start,
+                "start_time": fallback_t,
                 "matched": False,
-                "match_ratio": round(max(br_lnw, br_fz), 2),
+                "match_ratio": 0.0,
                 "method": "proportional_fallback",
             }
         )
 
-    # ── Post-pass 1: enforce monotonic non-decreasing starts ─────────────────
+    # ── Post-pass 1: monotonic non-decreasing starts ─────────────────────────
     for i in range(1, len(results)):
         if results[i]["start_time"] <= results[i - 1]["start_time"]:
             results[i]["start_time"] = round(results[i - 1]["start_time"] + 0.05, 3)
@@ -490,7 +400,7 @@ def compute_segment_starts(
     # ── Post-pass 2: anchor interpolation for unmatched segments ─────────────
     _interpolate_unmatched(results, total_duration)
 
-    # ── Post-pass 3: final monotonicity (interpolation can violate it) ───────
+    # ── Post-pass 3: final monotonicity after interpolation ──────────────────
     for i in range(1, len(results)):
         if results[i]["start_time"] <= results[i - 1]["start_time"]:
             results[i]["start_time"] = round(results[i - 1]["start_time"] + 0.05, 3)
