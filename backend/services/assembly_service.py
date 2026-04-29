@@ -66,7 +66,103 @@ def map_segments_to_timestamps(project_id, project_dir) -> list:
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
 
+    # Print a quick quality report to the server log.
+    _log_assembly_quality(result, total_duration)
+
     return result
+
+
+def _log_assembly_quality(segments: list, total_duration: float) -> None:
+    """Print a one-line quality summary to the server log after every assembly."""
+    n = len(segments)
+    if n == 0:
+        print("[assembly-qc] no segments", flush=True)
+        return
+    matched = sum(1 for s in segments if s.get("matched"))
+    durations = [s.get("end", 0) - s.get("start", 0) for s in segments]
+    max_dur = max(durations) if durations else 0
+    min_dur = min(durations) if durations else 0
+    avg_dur = sum(durations) / len(durations) if durations else 0
+    bad = [s["segment_id"] for s in segments if (s.get("end", 0) - s.get("start", 0)) > 30]
+    pct = round(matched / n * 100, 1)
+    print(
+        f"[assembly-qc] segments={n} matched={matched}/{n} ({pct}%)"
+        f" dur min={min_dur:.2f}s avg={avg_dur:.2f}s max={max_dur:.2f}s"
+        + (f" SUSPICIOUS>{30}s: {bad}" if bad else ""),
+        flush=True,
+    )
+
+
+def validate_assembly(segments: list, total_duration: float) -> dict:
+    """
+    Run quality checks on assembled segments.  Returns a dict with:
+    - pass: bool  (True when the assembly looks correct enough to export)
+    - match_pct: float
+    - issues: list[str]  (human-readable warnings)
+    - problem_scenes: list[int]  (segment_ids with suspicious timing)
+    """
+    issues: list[str] = []
+    problem_scenes: list[int] = []
+    n = len(segments)
+
+    if n == 0:
+        return {"pass": False, "match_pct": 0.0, "issues": ["No segments"], "problem_scenes": []}
+
+    matched = sum(1 for s in segments if s.get("matched"))
+    match_pct = round(matched / n * 100, 1)
+
+    if match_pct < 80:
+        issues.append(f"Only {match_pct}% of scenes matched to audio — sync will be poor.")
+    elif match_pct < 95:
+        issues.append(f"{match_pct}% of scenes matched — a few scenes may be slightly off.")
+
+    durations = []
+    for s in segments:
+        start = float(s.get("start", 0) or 0)
+        end = float(s.get("end", 0) or 0)
+        dur = end - start
+        durations.append(dur)
+        sid = s.get("segment_id")
+        if dur > 30:
+            issues.append(f"Scene {sid} duration {dur:.1f}s is suspiciously long (>{30}s).")
+            problem_scenes.append(sid)
+        elif dur <= 0:
+            issues.append(f"Scene {sid} has zero or negative duration.")
+            problem_scenes.append(sid)
+        elif dur < 0.5:
+            issues.append(f"Scene {sid} duration {dur:.2f}s is very short (<0.5s).")
+            problem_scenes.append(sid)
+
+    # Check monotonicity
+    for i in range(1, len(segments)):
+        if segments[i].get("start", 0) < segments[i - 1].get("start", 0):
+            issues.append(
+                f"Scene {segments[i].get('segment_id')} starts before scene "
+                f"{segments[i - 1].get('segment_id')} — order is wrong."
+            )
+            problem_scenes.append(segments[i].get("segment_id"))
+
+    # Check last segment ends near total_duration
+    if segments and total_duration > 0:
+        last_end = float(segments[-1].get("end", 0) or 0)
+        drift = abs(last_end - total_duration)
+        if drift > 2.0:
+            issues.append(
+                f"Last scene ends at {last_end:.2f}s but audio is {total_duration:.2f}s "
+                f"({drift:.2f}s drift)."
+            )
+
+    ok = match_pct >= 90 and len(problem_scenes) == 0
+    return {
+        "pass": ok,
+        "match_pct": match_pct,
+        "matched": matched,
+        "total": n,
+        "issues": issues,
+        "problem_scenes": list(dict.fromkeys(problem_scenes)),  # deduplicated
+        "avg_duration_sec": round(sum(durations) / max(len(durations), 1), 2),
+        "max_duration_sec": round(max(durations) if durations else 0, 2),
+    }
 
 
 def _first_alpha_token(text: str) -> str:

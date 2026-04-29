@@ -824,6 +824,34 @@ def get_segments(id: str):
         return json.load(f)
 
 
+@app.get("/api/projects/{id}/validate-assembly")
+def validate_assembly_endpoint(id: str):
+    """
+    Run quality checks on the current segments.json and return a validation report.
+    Call this after assembly to verify sync quality before exporting.
+    """
+    project_dir = get_project_dir(id)
+    seg_path = project_dir / "segments.json"
+    if not seg_path.exists():
+        raise HTTPException(status_code=404, detail="No segments.json — run assembly first.")
+
+    with open(seg_path, "r", encoding="utf-8") as f:
+        segments = json.load(f)
+
+    total_duration = 0.0
+    for name in ("audio_corrected.json", "audio_transcript.json"):
+        p = project_dir / name
+        if p.is_file():
+            with open(p, "r", encoding="utf-8") as f:
+                audio_data = json.load(f)
+            total_duration = float(audio_data.get("duration", 0) or 0)
+            if total_duration == 0 and audio_data.get("words"):
+                total_duration = float(audio_data["words"][-1].get("end", 0) or 0)
+            break
+
+    return validate_assembly(segments, total_duration)
+
+
 @app.post("/api/projects/{id}/generate-subtitles")
 def generate_subtitles(id: str):
     project_dir = get_project_dir(id)

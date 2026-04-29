@@ -194,6 +194,34 @@ export default function EditorPage() {
     canvas_display_width: canvasRef.current?.offsetWidth ?? 1920,
   };
 
+  type AssemblyQc = {
+    pass: boolean;
+    match_pct: number;
+    matched: number;
+    total: number;
+    issues: string[];
+    problem_scenes: number[];
+    avg_duration_sec: number;
+    max_duration_sec: number;
+  };
+  const [assemblyQc, setAssemblyQc] = useState<AssemblyQc | null>(null);
+  const [assemblyQcOpen, setAssemblyQcOpen] = useState(false);
+
+  const runValidateAssembly = useCallback(async () => {
+    if (!id) return;
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8050';
+      const res = await fetch(`${apiBase}/api/projects/${encodeProjectIdForPath(id)}/validate-assembly`);
+      if (!res.ok) return;
+      const data = await res.json() as AssemblyQc;
+      setAssemblyQc(data);
+      // Auto-open panel when there are problems
+      if (!data.pass) setAssemblyQcOpen(true);
+    } catch {
+      // validation is advisory — silent failure is OK
+    }
+  }, [id]);
+
   const [subtitleGenPending, setSubtitleGenPending] = useState(false);
   const subtitleGenLockRef = useRef(false);
   const hasSubtitlesRef = useRef(hasSubtitles);
@@ -325,6 +353,12 @@ export default function EditorPage() {
     };
     load();
   }, [id, showToast]);
+
+  // Auto-run assembly validation whenever the editor loads or segments change.
+  useEffect(() => {
+    if (!dataLoaded || segments.length === 0) return;
+    void runValidateAssembly();
+  }, [dataLoaded, runValidateAssembly]);
 
   useEffect(() => {
     if (!dataLoaded || !id || autoSubtitlesInitRef.current) return;
@@ -1334,6 +1368,52 @@ export default function EditorPage() {
             )}
           </div>
         </div>
+        {/* ── Assembly Quality Report ─────────────────────────────────── */}
+        {assemblyQc && (
+          <div className="mx-4 mb-2 rounded-lg border text-xs"
+            style={{
+              borderColor: assemblyQc.pass ? 'var(--garden-border)' : 'var(--garden-warning)',
+              backgroundColor: assemblyQc.pass ? 'var(--garden-surface)' : 'rgba(255,180,0,0.07)',
+            }}
+          >
+            <div
+              className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none"
+              onClick={() => setAssemblyQcOpen(o => !o)}
+            >
+              <span style={{ color: assemblyQc.pass ? 'var(--garden-accent)' : 'var(--garden-warning)' }}>
+                {assemblyQc.pass ? '✓' : '⚠'}
+              </span>
+              <span className="font-semibold" style={{ color: 'var(--garden-text)' }}>
+                Sync Quality: {assemblyQc.match_pct}% matched ({assemblyQc.matched}/{assemblyQc.total} scenes)
+              </span>
+              {assemblyQc.problem_scenes.length > 0 && (
+                <span className="ml-1" style={{ color: 'var(--garden-warning)' }}>
+                  — {assemblyQc.problem_scenes.length} problem scene{assemblyQc.problem_scenes.length > 1 ? 's' : ''}
+                </span>
+              )}
+              <button
+                onClick={(e) => { e.stopPropagation(); void runValidateAssembly(); }}
+                className="ml-auto text-xs px-2 py-0.5 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)]"
+              >
+                Re-check
+              </button>
+              <span style={{ color: 'var(--garden-text-soft)' }}>{assemblyQcOpen ? '▲' : '▼'}</span>
+            </div>
+            {assemblyQcOpen && (
+              <div className="px-3 pb-3 flex flex-col gap-1" style={{ color: 'var(--garden-text-soft)' }}>
+                <div>Avg scene duration: {assemblyQc.avg_duration_sec}s · Longest: {assemblyQc.max_duration_sec}s</div>
+                {assemblyQc.issues.map((iss, i) => (
+                  <div key={i} style={{ color: 'var(--garden-warning)' }}>• {iss}</div>
+                ))}
+                {assemblyQc.problem_scenes.length > 0 && (
+                  <div>Problem scene IDs: {assemblyQc.problem_scenes.join(', ')}</div>
+                )}
+                {assemblyQc.pass && <div style={{ color: 'var(--garden-accent)' }}>All checks passed — assembly looks correct.</div>}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="mt-4 mx-4 rounded-xl" style={{ backgroundColor: 'var(--garden-timeline)' }}>
           <div className="flex items-center gap-2 px-2 py-1">
             <span className="text-[color:var(--garden-text-soft)] text-xs">Zoom</span>
