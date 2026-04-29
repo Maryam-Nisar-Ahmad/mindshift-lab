@@ -4,14 +4,18 @@ from __future__ import annotations
 
 MIN_WORD_HIGHLIGHT_SEC = 0.08
 MAX_INTRA_GAP_SEC = 0.10
-GAP_ABSORB_THRESHOLD_SEC = 0.30
+# Gap absorption is disabled: artificially pulling word ends forward / next-word starts backward
+# shifts timestamps away from what the ASR actually measured, causing subtitle lines and segment
+# alignment anchors to appear up to ~180 ms before the true spoken time.
+GAP_ABSORB_THRESHOLD_SEC = 0.0
 
 
 def refine_word_timestamps(words: list[dict]) -> list[dict]:
     """
     - Clamp word end to not exceed next word start.
     - Enforce minimum duration per word (karaoke visibility).
-    - Absorb gaps > MAX_INTRA_GAP_SEC between consecutive words by extending previous word (proportional feel).
+    - Close tiny gaps (≤ MAX_INTRA_GAP_SEC) by meeting at the midpoint so karaoke highlights flow.
+    - Larger gaps (natural pauses) are left untouched to preserve ASR timing accuracy.
     """
     if not words:
         return []

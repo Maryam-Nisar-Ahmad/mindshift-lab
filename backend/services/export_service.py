@@ -165,7 +165,17 @@ def build_and_export(project_id, project_dir, editor_state, job_status):
         transitions = editor_state.get("transitions", {})
         durations = []
         for idx, seg in enumerate(segments):
-            dur = seg.get("end", 0) - seg.get("start", 0)
+            end_t = float(seg.get("end", 0) or 0)
+            start_t = float(seg.get("start", 0) or 0)
+            # Segment 0: the video starts at time 0 regardless of where the first ASR word falls.
+            # Using (end - start) would make every subsequent image transition early by exactly
+            # `start_t` seconds (e.g. 1 s of initial silence → all images 1 s early for the
+            # entire video).  Use end_t alone so the first image covers any leading silence and
+            # all subsequent image switches land on their exact audio timestamps.
+            if idx == 0:
+                dur = end_t
+            else:
+                dur = end_t - start_t
             if dur <= 0:
                 dur = 4.0
             # xfade overlaps clips by fade duration, which shortens the output vs the editor timeline.

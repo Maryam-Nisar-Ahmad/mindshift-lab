@@ -123,21 +123,9 @@ def _nw_align_script_to_asr(
     return match_asr_idx
 
 
-def _snap_start_to_silence(
-    first_asr_idx: int,
-    words: list[dict],
-    *,
-    min_gap_sec: float = 0.08,
-    max_nudge_sec: float = 0.06,
-) -> float:
-    """Prefer cutting slightly before speech if there is measurable silence before it."""
-    if first_asr_idx <= 0:
-        return float(words[0]["start"])
-    gap = float(words[first_asr_idx]["start"]) - float(words[first_asr_idx - 1]["end"])
-    raw_start = float(words[first_asr_idx]["start"])
-    if gap >= min_gap_sec:
-        return round(max(float(words[first_asr_idx - 1]["end"]), raw_start - max_nudge_sec), 3)
-    return round(raw_start, 3)
+def _exact_word_start(first_asr_idx: int, words: list[dict]) -> float:
+    """Return the exact ASR timestamp of the matched word with no nudging."""
+    return round(float(words[first_asr_idx]["start"]), 3)
 
 
 def _fuzzy_probe_fallback(
@@ -293,7 +281,7 @@ def compute_segment_starts(
 
         if use_nw:
             first_idx = min(matched_asr)
-            start_snapped = _snap_start_to_silence(first_idx, words)
+            start_snapped = _exact_word_start(first_idx, words)
             ratio_guess = min(100.0, max(55.0, 52.0 + mean_pair * 2.8))
 
             nw_overlap = first_idx < last_asr_cursor
@@ -302,7 +290,7 @@ def compute_segment_starts(
                 st, ok, br, new_pos = _fuzzy_probe_fallback(seg_word_list, words, last_asr_cursor)
                 if ok and br >= 70:
                     fi = min(range(len(words)), key=lambda i: abs(float(words[i]["start"]) - st))
-                    start_snapped = _snap_start_to_silence(fi, words)
+                    start_snapped = _exact_word_start(fi, words)
                     results.append(
                         {
                             "segment_id": segment_id,
@@ -331,7 +319,7 @@ def compute_segment_starts(
         st, ok, br, new_pos = _fuzzy_probe_fallback(seg_word_list, words, last_asr_cursor)
         if ok:
             fi = min(range(len(words)), key=lambda i: abs(float(words[i]["start"]) - st))
-            start_snapped = _snap_start_to_silence(fi, words)
+            start_snapped = _exact_word_start(fi, words)
             results.append(
                 {
                     "segment_id": segment_id,
