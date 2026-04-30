@@ -170,12 +170,12 @@ export default function ProjectPage() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteConfirmTitle, setDeleteConfirmTitle] = useState('');
   const [step1Template, setStep1Template] = useState<string | null>(null);
-  const [step2aTemplate, setStep2aTemplate] = useState<string | null>(null);
+  // step2aTemplate removed — Part A Perplexity step reverted
   const [step2Template, setStep2Template] = useState<string | null>(null);
   const [step1Title, setStep1Title] = useState('');
   const [step2Script, setStep2Script] = useState('');
   const [step1Copied, setStep1Copied] = useState(false);
-  const [step2aCopied, setStep2aCopied] = useState(false);
+  // step2aCopied removed — Part A Perplexity step reverted
   const [step2Copied, setStep2Copied] = useState(false);
   const [step3Prompts, setStep3Prompts] = useState<{ segment_id: number; segment_text: string; target_image?: string; mj_line: string }[] | null>(null);
   const [step3JobId, setStep3JobId] = useState<string | null>(null);
@@ -292,9 +292,6 @@ export default function ProjectPage() {
   }, [displayStep, showToast]);
   useEffect(() => {
     if (displayStep === 2) {
-      getPromptTemplate('2a_perplexity_research')
-        .then((r: { content?: string }) => setStep2aTemplate(r?.content ?? null))
-        .catch(() => setStep2aTemplate(null));
       getPromptTemplate('2_script_generation')
         .then((r: { content?: string }) => setStep2Template(r?.content ?? null))
         .catch((err) => {
@@ -836,38 +833,6 @@ export default function ProjectPage() {
                   )}
                   {num === 2 && (
                     <>
-                      {/* Part A — Perplexity Deep Research */}
-                      <div className="mb-1 flex items-center gap-2">
-                        <span className="text-xs font-bold px-2 py-0.5 rounded" style={{ backgroundColor: 'color-mix(in srgb, var(--garden-lilac) 20%, var(--garden-card))', color: 'var(--garden-accent)', border: '1px solid color-mix(in srgb, var(--garden-accent) 30%, transparent)' }}>
-                          Part A — Perplexity Deep Research
-                        </span>
-                        <span className="text-xs" style={{ color: 'var(--garden-text-soft)' }}>Run this in Perplexity first, save the output</span>
-                      </div>
-                      <div className="rounded-lg p-4 border-l-4 max-h-48 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: 'var(--garden-surface)', borderLeftColor: 'var(--garden-lilac)', color: 'var(--garden-text)' }}>
-                        <button
-                          type="button"
-                          className="absolute top-2 right-2 rounded px-2 py-1 text-xs"
-                          style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text)' }}
-                          onClick={() => {
-                            const text = (step2aTemplate ?? '').replace('[INSERT VIDEO TITLE/TOPIC HERE]', project?.title ?? '');
-                            if (text) {
-                              navigator.clipboard.writeText(text);
-                              setStep2aCopied(true);
-                              setTimeout(() => setStep2aCopied(false), 2000);
-                            }
-                          }}
-                        >
-                          {step2aCopied ? '✓' : 'Copy'}
-                        </button>
-                        <pre className="whitespace-pre-wrap pr-16">{(step2aTemplate ?? 'Loading…').replace('[INSERT VIDEO TITLE/TOPIC HERE]', project?.title ?? '[INSERT VIDEO TITLE/TOPIC HERE]')}</pre>
-                      </div>
-
-                      {/* Part B — Claude Script Writing */}
-                      <div className="mt-4 mb-1 flex items-center gap-2">
-                        <span className="text-xs font-bold px-2 py-0.5 rounded" style={{ backgroundColor: 'color-mix(in srgb, var(--garden-accent) 15%, var(--garden-card))', color: 'var(--garden-accent)', border: '1px solid color-mix(in srgb, var(--garden-accent) 30%, transparent)' }}>
-                          Part B — Claude Script (attach Perplexity doc)
-                        </span>
-                      </div>
                       <div className="rounded-lg p-4 border-l-4 max-h-64 overflow-y-auto relative font-mono text-sm" style={{ backgroundColor: 'var(--garden-surface)', borderLeftColor: 'var(--garden-accent)', color: 'var(--garden-text)' }}>
                         <button
                           type="button"
