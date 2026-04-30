@@ -802,11 +802,69 @@ def assemble(id: str):
     try:
         project_dir = get_project_dir(id)
         segments = map_segments_to_timestamps(id, project_dir)
+        # Editor consumes editor_state first; ensure continuous scene boundaries there.
+        audio_duration = read_audio_timeline_duration_sec(project_dir) or (
+            float(segments[-1].get("end", 0) or 0) if segments else 0.0
+        )
+        continuous_segments = [dict(s) for s in segments]
+        for i in range(len(continuous_segments)):
+            if i < len(continuous_segments) - 1:
+                continuous_segments[i]["end"] = round(
+                    float(continuous_segments[i + 1].get("start", continuous_segments[i]["end"]) or continuous_segments[i]["end"]),
+                    3,
+                )
+            else:
+                continuous_segments[i]["end"] = round(float(audio_duration or continuous_segments[i].get("end", 0) or 0), 3)
+            if float(continuous_segments[i]["end"]) <= float(continuous_segments[i].get("start", 0) or 0):
+                continuous_segments[i]["end"] = round(float(continuous_segments[i].get("start", 0) or 0) + 0.05, 3)
+        editor_state_path = project_dir / "editor_state.json"
+        existing_state: dict = {}
+        if editor_state_path.exists():
+            try:
+                with open(editor_state_path, "r", encoding="utf-8") as f:
+                    existing_state = json.load(f) or {}
+            except Exception:
+                existing_state = {}
+        audio_json_path = project_dir / "audio_corrected.json"
+        if not audio_json_path.exists():
+            audio_json_path = project_dir / "audio_transcript.json"
+        if not audio_json_path.exists():
+            raise FileNotFoundError("No audio transcript found")
+        with open(audio_json_path, "r", encoding="utf-8") as f:
+            audio_data = json.load(f)
+        subtitles = build_subtitle_lines(audio_data)
+        subtitles = punctuate_subtitle_lines(subtitles)
+        subtitles, subtitle_onset_report = apply_adaptive_subtitle_word_onset_correction(
+            subtitles,
+            project_dir / "audio.mp3",
+            threshold_ms=SUBTITLE_ONSET_EARLY_THRESHOLD_MS,
+            target_margin_ms=SUBTITLE_ONSET_TARGET_MARGIN_MS,
+        )
+
+        existing_state["segments"] = continuous_segments
+        existing_state["subtitles"] = subtitles
+        existing_state["has_subtitles"] = True
+        with open(editor_state_path, "w", encoding="utf-8") as f:
+            json.dump(existing_state, f, indent=2, ensure_ascii=False)
         meta = read_meta(id)
         write_meta(id, meta)
         elapsed = time.perf_counter() - t0
-        print(f"[assemble] project={id!r} segments={len(segments)} took {elapsed:.2f}s", flush=True)
-        return segments
+        print(
+            f"[subtitle-adaptive-verify] project={id!r} "
+            f"threshold_ms={subtitle_onset_report.get('threshold_ms')} "
+            f"target_margin_ms={subtitle_onset_report.get('target_margin_ms')} "
+            f"total_words_processed={subtitle_onset_report.get('total_words_processed')} "
+            f"robust_onset_words={subtitle_onset_report.get('robust_words')} "
+            f"corrected_words={subtitle_onset_report.get('corrected_words')} "
+            f"unchanged_words={subtitle_onset_report.get('unchanged_words')} "
+            f"post_p90_ms={(subtitle_onset_report.get('after_ms') or {}).get('p90')} "
+            f"post_max_ms={(subtitle_onset_report.get('after_ms') or {}).get('max')} "
+            f"before_ms={subtitle_onset_report.get('before_ms')} "
+            f"after_ms={subtitle_onset_report.get('after_ms')}",
+            flush=True,
+        )
+        print(f"[assemble] project={id!r} segments={len(continuous_segments)} took {elapsed:.2f}s", flush=True)
+        return continuous_segments
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -822,6 +880,19 @@ def get_segments(id: str):
         return []
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+@app.get("/api/projects/{id}/audio-duration")
+def get_audio_timeline_duration(id: str):
+    """Canonical narration length from audio_corrected / audio_transcript (matches assembly clock)."""
+    project_dir = get_project_dir(id)
+    d = read_audio_timeline_duration_sec(project_dir)
+    if d is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No audio transcript — upload audio on Step 5 or wait for processing.",
+        )
+    return {"duration_sec": d}
 
 
 @app.get("/api/projects/{id}/validate-assembly")

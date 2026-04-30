@@ -2,9 +2,8 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import { getProject, getSegments, getEditorState, saveEditorState, fileUrl, generateSubtitles, exportVideo, getJobStatus, stepComplete } from '@/lib/api';
+import { getProject, getSegments, getEditorState, saveEditorState, fileUrl, generateSubtitles, exportVideo, getJobStatus, stepComplete, getAudioTimelineDuration } from '@/lib/api';
 import { projectIdFromParams, encodeProjectIdForRoute, encodeProjectIdForPath } from '@/lib/projectId';
-import { snapSubtitleLines } from '@/lib/subtitleTiming';
 import useToast from '@/hooks/useToast';
 import Toast from '@/components/Toast';
 
@@ -48,6 +47,34 @@ type HistorySnapshot = {
   parkedSegments: Segment[];
   transitions: Record<string, Transition>;
 };
+
+function normalizeSegments(list: Segment[]): Segment[] {
+  const sorted = [...list]
+    .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end))
+    .sort((a, b) => a.start - b.start || a.segment_id - b.segment_id)
+    .map((s) => ({ ...s }));
+  for (let i = 0; i < sorted.length; i += 1) {
+    if (i > 0 && sorted[i].start < sorted[i - 1].start) {
+      sorted[i].start = sorted[i - 1].start;
+    }
+    if (sorted[i].end <= sorted[i].start) {
+      sorted[i].end = Number((sorted[i].start + 0.5).toFixed(3));
+    }
+    if (i < sorted.length - 1 && sorted[i].end > sorted[i + 1].start) {
+      sorted[i].end = Number(Math.max(sorted[i].start + 0.05, sorted[i + 1].start).toFixed(3));
+    }
+  }
+  return sorted;
+}
+
+/** Tail after last narration segment end (export + scrubber); playback stops at audio end when known. */
+const END_PADDING_SECONDS = 1.5;
+const MIN_LINKED_SCENE_DURATION_SEC = 0.1;
+
+function timelineTotalSeconds(maxSegmentEnd: number, audioDurationSec: number): number {
+  const base = Math.max(maxSegmentEnd, audioDurationSec || 0);
+  return base > 0 ? base + END_PADDING_SECONDS : 0;
+}
 
 /** Snap `value` to the nearest time in `points` if within `threshold` (seconds). */
 function snapTimeToNearest(value: number, points: number[], threshold: number): number {
@@ -144,11 +171,28 @@ export default function EditorPage() {
   const [globalFadeDuration, setGlobalFadeDuration] = useState(0.5);
   const [timelineZoom, setTimelineZoom] = useState(1);
   const [zoomStep, setZoomStep] = useState(0.5);
+  const [linkedEditing, setLinkedEditing] = useState(false);
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem('editor_linked_editing');
+      if (stored === '1') setLinkedEditing(true);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('editor_linked_editing', linkedEditing ? '1' : '0');
+    } catch {}
+  }, [linkedEditing]);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  /** From transcript JSON; used to align scrubber + stop playback when narration ends. */
+  const [audioDurationSec, setAudioDurationSec] = useState(0);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number | null>(null);
   const currentTimeRef = useRef<number>(0);
+  const audioDurationSecRef = useRef(0);
+  const audioClockWallRef = useRef(0);
+  const audioClockMediaRef = useRef(0);
   const autoSubtitlesInitRef = useRef(false);
   const timelineInnerRef = useRef<HTMLDivElement>(null);
   const timelineOuterRef = useRef<HTMLDivElement>(null);
@@ -176,7 +220,7 @@ export default function EditorPage() {
     alignment: subtitleSettings.position,
     subtitle_offset_ms: subtitleSettings.subtitle_offset_ms ?? 0,
     totalDuration,
-    end_padding_seconds: 1.5,
+    end_padding_seconds: END_PADDING_SECONDS,
     canvas_display_width: 1920 as number,
   });
   persistStateRef.current = {
@@ -190,7 +234,7 @@ export default function EditorPage() {
     alignment: subtitleSettings.position,
     subtitle_offset_ms: subtitleSettings.subtitle_offset_ms ?? 0,
     totalDuration,
-    end_padding_seconds: 1.5,
+    end_padding_seconds: END_PADDING_SECONDS,
     canvas_display_width: canvasRef.current?.offsetWidth ?? 1920,
   };
 
@@ -235,8 +279,13 @@ export default function EditorPage() {
   subtitlesListRef.current = subtitles;
 
   const buildPersistPayload = useCallback(
-    (overrideSubtitles: SubtitleLine[], overrideHasSubtitles: boolean) => ({
-      segments,
+    (
+      overrideSubtitles: SubtitleLine[],
+      overrideHasSubtitles: boolean,
+      overrideSegments?: Segment[],
+      overrideTotalDuration?: number,
+    ) => ({
+      segments: normalizeSegments(overrideSegments ?? segments),
       parkedSegments,
       subtitles: overrideSubtitles,
       transitions,
@@ -245,14 +294,14 @@ export default function EditorPage() {
       font_size: subtitleSettings.font_size,
       alignment: subtitleSettings.position,
       subtitle_offset_ms: subtitleSettings.subtitle_offset_ms ?? 0,
-      totalDuration,
-      end_padding_seconds: 1.5,
+      totalDuration: overrideTotalDuration ?? totalDuration,
+      end_padding_seconds: END_PADDING_SECONDS,
       canvas_display_width: canvasRef.current?.offsetWidth ?? 1920,
     }),
     [segments, parkedSegments, transitions, subtitleSettings, totalDuration],
   );
 
-  const runGenerateSubtitles = useCallback(async () => {
+  const runGenerateSubtitles = useCallback(async (overrideSegments?: Segment[], overrideTotalDuration?: number) => {
     if (!id || subtitleGenLockRef.current) return;
     subtitleGenLockRef.current = true;
     setSubtitleGenPending(true);
@@ -272,9 +321,8 @@ export default function EditorPage() {
         if (hadSubs) setSubtitles(backupSubs);
         return;
       }
-      const snapped = snapSubtitleLines(result);
-      await saveEditorState(id, buildPersistPayload(snapped, true));
-      setSubtitles(snapped);
+      await saveEditorState(id, buildPersistPayload(result, true, overrideSegments, overrideTotalDuration));
+      setSubtitles(result);
       setHasSubtitles(true);
     } catch (err) {
       if (hadSubs) setSubtitles(backupSubs);
@@ -300,24 +348,33 @@ export default function EditorPage() {
   }, [currentTime]);
 
   useEffect(() => {
+    audioDurationSecRef.current = audioDurationSec;
+  }, [audioDurationSec]);
+
+  useEffect(() => {
     if (!id) return;
     const load = async () => {
       try {
-        const [p, segs, editorState] = await Promise.all([
+        const [p, segs, editorState, audioMeta] = await Promise.all([
           getProject(id).then((x: Project) => x ?? null),
           getSegments(id).then((s: Segment[]) => Array.isArray(s) ? s : []),
           getEditorState(id).then((e: Record<string, unknown>) => e ?? {}),
+          getAudioTimelineDuration(id).then((m) => m).catch(() => null),
         ]);
         setProject(p);
+        const ad = audioMeta && typeof audioMeta.duration_sec === 'number' && audioMeta.duration_sec > 0
+          ? audioMeta.duration_sec
+          : 0;
+        setAudioDurationSec(ad);
         const stateSegs = (editorState.segments as Segment[] | undefined);
-        const finalSegments = (stateSegs && stateSegs.length > 0 ? stateSegs : segs) as Segment[];
+        const finalSegments = normalizeSegments((stateSegs && stateSegs.length > 0 ? stateSegs : segs) as Segment[]);
         setSegments(finalSegments);
         setParkedSegments((editorState.parkedSegments as Segment[] | undefined) || []);
 
         const rawSubs = editorState.subtitles;
         const stateSubtitles: SubtitleLine[] = Array.isArray(rawSubs) ? rawSubs : [];
         if (stateSubtitles.length > 0) {
-          setSubtitles(snapSubtitleLines(stateSubtitles));
+          setSubtitles(stateSubtitles);
           setHasSubtitles(true);
         } else {
           setSubtitles([]);
@@ -339,10 +396,10 @@ export default function EditorPage() {
           setSubtitleSettings(merged);
         }
 
-        const duration = finalSegments.length > 0
-          ? Math.max(...finalSegments.map((seg) => seg.end)) + 1.5
+        const maxEnd = finalSegments.length > 0
+          ? Math.max(...finalSegments.map((seg) => seg.end))
           : 0;
-        setTotalDuration(duration);
+        setTotalDuration(timelineTotalSeconds(maxEnd, ad));
         const initialSnapshot: HistorySnapshot = {
           segments: JSON.parse(JSON.stringify(finalSegments)),
           parkedSegments: JSON.parse(JSON.stringify((editorState.parkedSegments as Segment[] | undefined) || [])),
@@ -418,9 +475,21 @@ export default function EditorPage() {
     const ch = canvas.height;
 
     const activeSeg = segments.find((s) => s.start <= time && time < s.end);
-    const lastSegment = segments.length > 0 ? segments[segments.length - 1] : null;
-    const isTailZone = !!lastSegment && time >= lastSegment.end && time <= totalDuration;
-    const segmentToRender = activeSeg ?? (isTailZone ? lastSegment : null);
+    let segmentToRender: Segment | null = activeSeg ?? null;
+    if (!segmentToRender && segments.length > 0) {
+      if (time < segments[0].start) {
+        // Keep first frame visible before first spoken line.
+        segmentToRender = segments[0];
+      } else {
+        // Option B hold: keep previous image visible through inter-line silence.
+        for (let i = segments.length - 1; i >= 0; i -= 1) {
+          if (segments[i].start <= time) {
+            segmentToRender = segments[i];
+            break;
+          }
+        }
+      }
+    }
     if (segmentToRender) {
       const img = preloadedImages[segmentToRender.segment_id.toString()];
       if (img && img.complete && img.naturalWidth > 0) {
@@ -471,22 +540,30 @@ export default function EditorPage() {
       const highlightColor = subtitleSettings.highlight_color || '#FFFF00';
       const highlightEnabled = subtitleSettings.highlight_enabled !== false;
       const words = activeLine.words || [];
+      // Progressive reveal: only show words that have started.
+      const visibleWords = words.filter((w) => w.start <= subTime);
       if (!highlightEnabled || words.length === 0) {
+        const visibleText = words.length > 0
+          ? visibleWords.map((w) => w.word).join(' ')
+          : activeLine.text;
+        if (!visibleText) return;
         const outlineWidth = subtitleSettings.outline_width ?? 4;
         if (outlineWidth > 0) {
           ctx.strokeStyle = '#000000';
           ctx.lineWidth = outlineWidth * (canvas.width / EXPORT_W);
-          ctx.strokeText(activeLine.text, canvas.width / 2, y);
+          ctx.strokeText(visibleText, canvas.width / 2, y);
         }
         ctx.fillStyle = baseColor;
-        ctx.fillText(activeLine.text, canvas.width / 2, y);
+        ctx.fillText(visibleText, canvas.width / 2, y);
       } else {
+        if (visibleWords.length === 0) return;
         const outlineWidth = subtitleSettings.outline_width ?? 4;
-        const totalWidth = ctx.measureText(activeLine.text).width;
+        const visibleText = visibleWords.map((w) => w.word).join(' ');
+        const totalWidth = ctx.measureText(visibleText).width;
         let x = canvas.width / 2 - totalWidth / 2;
         ctx.textAlign = 'left';
-        words.forEach((w, i) => {
-          const wordWithSpace = i < words.length - 1 ? w.word + ' ' : w.word;
+        visibleWords.forEach((w, i) => {
+          const wordWithSpace = i < visibleWords.length - 1 ? w.word + ' ' : w.word;
           const isActive = w.start <= subTime && subTime < w.end;
           if (outlineWidth > 0) {
             ctx.strokeStyle = '#000000';
@@ -518,23 +595,46 @@ export default function EditorPage() {
       }
       return;
     }
+    const startT = currentTimeRef.current;
     if (audioEl) {
-      audioEl.currentTime = currentTimeRef.current;
+      audioEl.currentTime = startT;
       audioEl.playbackRate = playbackSpeed;
       void audioEl.play();
+      audioClockWallRef.current = performance.now();
+      audioClockMediaRef.current = startT;
     }
     const loop = () => {
       const el = audioRef.current;
-      if (el && !el.paused) {
-        const cap =
-          totalDuration > 0 ? totalDuration : (Number.isFinite(el.duration) && el.duration > 0 ? el.duration : Infinity);
-        const t = Math.min(Math.max(0, el.currentTime), cap);
-        setCurrentTime(t);
-        if (totalDuration > 0 && t >= totalDuration - 0.02) {
-          setIsPlaying(false);
-          setCurrentTime(totalDuration);
-        }
+      const timelineCap = totalDuration > 0 ? totalDuration : Infinity;
+      const narrCap = audioDurationSecRef.current > 0 ? audioDurationSecRef.current : Infinity;
+      const playCap = Math.min(timelineCap, narrCap);
+
+      // Drive the playhead from actual decoded audio time — best match for ears vs subtitles/images.
+      let t: number;
+      if (el && !el.paused && Number.isFinite(el.currentTime)) {
+        t = Math.min(Math.max(0, el.currentTime), playCap);
+      } else {
+        const wall = performance.now();
+        t = Math.min(
+          audioClockMediaRef.current + ((wall - audioClockWallRef.current) / 1000) * playbackSpeed,
+          playCap,
+        );
       }
+      setCurrentTime(t);
+
+      if (narrCap < Infinity && t >= narrCap - 0.02) {
+        if (el) el.pause();
+        setIsPlaying(false);
+        setCurrentTime(narrCap);
+        return;
+      }
+      if (timelineCap < Infinity && t >= timelineCap - 0.02) {
+        if (el) el.pause();
+        setIsPlaying(false);
+        setCurrentTime(timelineCap);
+        return;
+      }
+
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
@@ -554,7 +654,9 @@ export default function EditorPage() {
     if (!audioEl) return;
     const onEnded = () => {
       setIsPlaying(false);
-      const dur = Number.isFinite(audioEl.duration) ? audioEl.duration : 0;
+      const fromJson = audioDurationSecRef.current > 0 ? audioDurationSecRef.current : 0;
+      const fromEl = Number.isFinite(audioEl.duration) ? audioEl.duration : 0;
+      const dur = fromJson > 0 ? fromJson : fromEl;
       setCurrentTime((prev) =>
         totalDuration > 0 ? Math.min(totalDuration, Math.max(prev, dur)) : dur,
       );
@@ -624,8 +726,8 @@ export default function EditorPage() {
     const maxEnd = source.length > 0
       ? Math.max(...source.map((seg) => seg.end))
       : 0;
-    setTotalDuration(maxEnd + 1.5);
-  }, [segments]);
+    setTotalDuration(timelineTotalSeconds(maxEnd, audioDurationSec));
+  }, [segments, audioDurationSec]);
 
   const buildSnapshot = useCallback((): HistorySnapshot => {
     return {
@@ -709,12 +811,30 @@ export default function EditorPage() {
         showToast((errBody as { detail?: string }).detail ?? 'Assembly failed', 'error');
         return;
       }
-      const newSegs = (await res.json()) as Segment[];
+      const newSegs = normalizeSegments((await res.json()) as Segment[]);
       if (Array.isArray(newSegs) && newSegs.length > 0) {
         saveToHistory();
         setSegments(newSegs);
-        updateTotalDuration(newSegs);
-        showToast('Images re-synced to audio ✓', 'success');
+        let ad = audioDurationSec;
+        try {
+          const m = await getAudioTimelineDuration(id);
+          if (typeof m.duration_sec === 'number' && m.duration_sec > 0) {
+            ad = m.duration_sec;
+            setAudioDurationSec(ad);
+          }
+        } catch {
+          /* keep previous */
+        }
+        const newTotalDuration = timelineTotalSeconds(Math.max(...newSegs.map((seg) => seg.end)), ad);
+        setTotalDuration(newTotalDuration);
+        // Persist the new timeline immediately so export/load cannot use stale segments.
+        await saveEditorState(
+          id,
+          buildPersistPayload(subtitlesListRef.current, hasSubtitlesRef.current, newSegs, newTotalDuration),
+        );
+        // Full resync: after image timeline realignment, rebuild subtitles from current audio too.
+        await runGenerateSubtitles(newSegs, newTotalDuration);
+        showToast('Images + subtitles re-synced to audio ✓', 'success');
         void runValidateAssembly();
       }
     } catch (err) {
@@ -722,7 +842,7 @@ export default function EditorPage() {
     } finally {
       setResyncPending(false);
     }
-  }, [id, resyncPending, showToast, saveToHistory, updateTotalDuration, runValidateAssembly]);
+  }, [id, resyncPending, showToast, saveToHistory, audioDurationSec, runValidateAssembly, runGenerateSubtitles]);
 
   const autoSave = useCallback(() => {
     if (!id) return;
@@ -1122,7 +1242,7 @@ export default function EditorPage() {
                           alignment: subtitleSettings.position,
                           subtitle_offset_ms: subtitleSettings.subtitle_offset_ms ?? 0,
                           totalDuration,
-                          end_padding_seconds: 1.5,
+                          end_padding_seconds: END_PADDING_SECONDS,
                           canvas_display_width: canvasRef.current?.offsetWidth ?? 1920,
                         };
                         try {
@@ -1402,70 +1522,20 @@ export default function EditorPage() {
             )}
           </div>
         </div>
-        {/* ── Assembly Quality Report ─────────────────────────────────── */}
-        {assemblyQc && (
-          <div className="mx-4 mb-2 rounded-lg border text-xs"
-            style={{
-              borderColor: assemblyQc.pass ? 'var(--garden-border)' : 'var(--garden-warning)',
-              backgroundColor: assemblyQc.pass ? 'var(--garden-surface)' : 'rgba(255,180,0,0.07)',
-            }}
-          >
-            <div
-              className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none"
-              onClick={() => setAssemblyQcOpen(o => !o)}
-            >
-              <span style={{ color: assemblyQc.pass ? 'var(--garden-accent)' : 'var(--garden-warning)' }}>
-                {assemblyQc.pass ? '✓' : '⚠'}
-              </span>
-              <span className="font-semibold" style={{ color: 'var(--garden-text)' }}>
-                Sync Quality: {assemblyQc.timing_pct ?? assemblyQc.match_pct}% good timing
-                <span className="font-normal text-[10px] ml-1" style={{ color: 'var(--garden-text-soft)' }}>
-                  ({assemblyQc.matched}/{assemblyQc.total} NW-aligned)
-                </span>
-              </span>
-              {assemblyQc.problem_scenes.length > 0 && (
-                <span className="ml-1" style={{ color: 'var(--garden-warning)' }}>
-                  — {assemblyQc.problem_scenes.length} problem scene{assemblyQc.problem_scenes.length > 1 ? 's' : ''}
-                </span>
-              )}
-              <div className="ml-auto flex items-center gap-1">
-                <button
-                  type="button"
-                  disabled={resyncPending}
-                  onClick={(e) => { e.stopPropagation(); void runResyncImages(); }}
-                  title="Re-run alignment and update all image positions from audio"
-                  className="text-xs px-2 py-0.5 rounded border disabled:opacity-50"
-                  style={{ borderColor: 'var(--garden-accent)', color: 'var(--garden-accent)', background: 'transparent' }}
-                >
-                  {resyncPending ? 'Re-syncing…' : '↺ Re-sync Images'}
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); void runValidateAssembly(); }}
-                  className="text-xs px-2 py-0.5 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)]"
-                >
-                  Re-check
-                </button>
-              </div>
-              <span style={{ color: 'var(--garden-text-soft)' }}>{assemblyQcOpen ? '▲' : '▼'}</span>
-            </div>
-            {assemblyQcOpen && (
-              <div className="px-3 pb-3 flex flex-col gap-1" style={{ color: 'var(--garden-text-soft)' }}>
-                <div>Avg scene duration: {assemblyQc.avg_duration_sec}s · Longest: {assemblyQc.max_duration_sec}s</div>
-                {assemblyQc.issues.map((iss, i) => (
-                  <div key={i} style={{ color: 'var(--garden-warning)' }}>• {iss}</div>
-                ))}
-                {assemblyQc.problem_scenes.length > 0 && (
-                  <div>Problem scene IDs: {assemblyQc.problem_scenes.join(', ')}</div>
-                )}
-                {assemblyQc.pass && <div style={{ color: 'var(--garden-accent)' }}>All checks passed — assembly looks correct.</div>}
-              </div>
-            )}
-          </div>
-        )}
-
         <div className="mt-4 mx-4 rounded-xl" style={{ backgroundColor: 'var(--garden-timeline)' }}>
           <div className="flex items-center gap-2 px-2 py-1">
+            <button
+              onClick={() => setLinkedEditing((v) => !v)}
+              className="text-xs px-2 py-0.5 rounded border transition-colors"
+              style={{
+                borderColor: linkedEditing ? 'var(--garden-accent)' : 'var(--garden-border)',
+                color: linkedEditing ? 'var(--garden-cream)' : 'var(--garden-text-soft)',
+                backgroundColor: linkedEditing ? 'var(--garden-accent)' : 'transparent',
+              }}
+              title="Linked boundary editing for adjacent scenes"
+            >
+              🔗 Linked Editing {linkedEditing ? 'ON' : 'OFF'}
+            </button>
             <span className="text-[color:var(--garden-text-soft)] text-xs">Zoom</span>
             <button
               onClick={() => setTimelineZoom(z => Math.max(1, parseFloat((z - zoomStep).toFixed(1))))}
@@ -1584,10 +1654,11 @@ export default function EditorPage() {
                   dragRef.current = { startX: e.clientX, startStart: seg.start, startEnd: seg.end, segmentId: seg.segment_id, side: 'left' };
                   let didSaveResizeHistory = false;
                   const onMove = (e: MouseEvent) => {
-                    if (!dragRef.current) return;
+                    const drag = dragRef.current;
+                    if (!drag) return;
                     const innerEl = timelineInnerRef.current;
                     const w = innerEl ? innerEl.offsetWidth : innerWidth;
-                    const delta = ((e.clientX - dragRef.current.startX) / w) * totalDuration;
+                    const delta = ((e.clientX - drag.startX) / w) * totalDuration;
                     if (!didSaveResizeHistory) {
                       saveToHistory();
                       didSaveResizeHistory = true;
@@ -1599,9 +1670,11 @@ export default function EditorPage() {
                     const snapThreshold = timelineSnapThresholdSec(totalDuration);
                     let nextSegs: Segment[] | null = null;
                     setSegments((prev) => {
-                      const self = prev.find((s) => s.segment_id === dragRef.current!.segmentId);
+                      const selfIdx = prev.findIndex((s) => s.segment_id === drag.segmentId);
+                      const self = selfIdx >= 0 ? prev[selfIdx] : null;
                       if (!self) return prev;
-                      let newStart = Math.max(0, Math.min(self.end - 0.5, dragRef.current!.startStart + delta));
+                      const leftNeighbor = selfIdx > 0 ? prev[selfIdx - 1] : null;
+                      let newStart = drag.startStart + delta;
                       const snapPoints = [
                         currentTimeRef.current,
                         0,
@@ -1609,8 +1682,19 @@ export default function EditorPage() {
                         ...prev.filter((s) => s.segment_id !== self.segment_id).flatMap((s) => [s.start, s.end]),
                       ];
                       newStart = snapTimeToNearest(newStart, snapPoints, snapThreshold);
-                      newStart = Math.max(0, Math.min(self.end - 0.5, newStart));
-                      nextSegs = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, start: newStart } : s));
+                      if (linkedEditing && leftNeighbor) {
+                        const minFromLeft = leftNeighbor.start + MIN_LINKED_SCENE_DURATION_SEC;
+                        const maxFromSelf = self.end - MIN_LINKED_SCENE_DURATION_SEC;
+                        newStart = Math.max(minFromLeft, Math.min(maxFromSelf, newStart));
+                        nextSegs = prev.map((s, idx) => {
+                          if (idx === selfIdx - 1) return { ...s, end: newStart };
+                          if (idx === selfIdx) return { ...s, start: newStart };
+                          return s;
+                        });
+                      } else {
+                        newStart = Math.max(0, Math.min(self.end - 0.5, newStart));
+                        nextSegs = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, start: newStart } : s));
+                      }
                       return nextSegs;
                     });
                     if (nextSegs) updateTotalDuration(nextSegs);
@@ -1629,10 +1713,11 @@ export default function EditorPage() {
                   dragRef.current = { startX: e.clientX, startStart: seg.start, startEnd: seg.end, segmentId: seg.segment_id, side: 'right' };
                   let didSaveResizeHistory = false;
                   const onMove = (e: MouseEvent) => {
-                    if (!dragRef.current) return;
+                    const drag = dragRef.current;
+                    if (!drag) return;
                     const innerEl = timelineInnerRef.current;
                     const w = innerEl ? innerEl.offsetWidth : innerWidth;
-                    const delta = ((e.clientX - dragRef.current.startX) / w) * totalDuration;
+                    const delta = ((e.clientX - drag.startX) / w) * totalDuration;
                     if (!didSaveResizeHistory) {
                       saveToHistory();
                       didSaveResizeHistory = true;
@@ -1644,9 +1729,11 @@ export default function EditorPage() {
                     const snapThreshold = timelineSnapThresholdSec(totalDuration);
                     let nextSegs: Segment[] | null = null;
                     setSegments((prev) => {
-                      const self = prev.find((s) => s.segment_id === dragRef.current!.segmentId);
+                      const selfIdx = prev.findIndex((s) => s.segment_id === drag.segmentId);
+                      const self = selfIdx >= 0 ? prev[selfIdx] : null;
                       if (!self) return prev;
-                      let newEnd = Math.max(self.start + 0.5, Math.min(totalDuration, dragRef.current!.startEnd + delta));
+                      const rightNeighbor = selfIdx >= 0 && selfIdx < prev.length - 1 ? prev[selfIdx + 1] : null;
+                      let newEnd = drag.startEnd + delta;
                       const snapPoints = [
                         currentTimeRef.current,
                         0,
@@ -1654,8 +1741,19 @@ export default function EditorPage() {
                         ...prev.filter((s) => s.segment_id !== self.segment_id).flatMap((s) => [s.start, s.end]),
                       ];
                       newEnd = snapTimeToNearest(newEnd, snapPoints, snapThreshold);
-                      newEnd = Math.max(self.start + 0.5, Math.min(totalDuration, newEnd));
-                      nextSegs = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, end: newEnd } : s));
+                      if (linkedEditing && rightNeighbor) {
+                        const minFromSelf = self.start + MIN_LINKED_SCENE_DURATION_SEC;
+                        const maxFromRight = rightNeighbor.end - MIN_LINKED_SCENE_DURATION_SEC;
+                        newEnd = Math.max(minFromSelf, Math.min(maxFromRight, newEnd));
+                        nextSegs = prev.map((s, idx) => {
+                          if (idx === selfIdx) return { ...s, end: newEnd };
+                          if (idx === selfIdx + 1) return { ...s, start: newEnd };
+                          return s;
+                        });
+                      } else {
+                        newEnd = Math.max(self.start + 0.5, Math.min(totalDuration, newEnd));
+                        nextSegs = prev.map((s) => (s.segment_id === self.segment_id ? { ...s, end: newEnd } : s));
+                      }
                       return nextSegs;
                     });
                     if (nextSegs) updateTotalDuration(nextSegs);
@@ -1671,8 +1769,8 @@ export default function EditorPage() {
                 };
                 const imgPath = imagePathForFileApi(seg.image);
                 const isUnmatched = seg.matched === false;
-                /** Only the selected clip gets active trim handles (avoids grabbing a neighbor's edge). */
-                const canTrimEdges = selectedSegmentId === seg.segment_id;
+                /** Linked Editing ON: any edge is directly draggable. OFF: keep selected-only trim behavior. */
+                const canTrimEdges = linkedEditing || selectedSegmentId === seg.segment_id;
                 const segBarStyle = {
                   left,
                   width,
@@ -1832,7 +1930,7 @@ export default function EditorPage() {
                       className={`absolute left-0 top-0 h-full cursor-ew-resize hover:opacity-100 ${canTrimEdges ? 'w-3' : 'w-2'}`}
                       style={{
                         backgroundColor: 'var(--garden-accent)',
-                        opacity: canTrimEdges ? 0.5 : 0,
+                        opacity: canTrimEdges ? (linkedEditing ? 0.3 : 0.5) : 0,
                         pointerEvents: canTrimEdges ? 'auto' : 'none',
                         zIndex: canTrimEdges ? 25 : 0,
                       }}
@@ -1865,7 +1963,7 @@ export default function EditorPage() {
                       className={`absolute right-0 top-0 h-full cursor-ew-resize hover:opacity-100 ${canTrimEdges ? 'w-3' : 'w-2'}`}
                       style={{
                         backgroundColor: 'var(--garden-accent)',
-                        opacity: canTrimEdges ? 0.5 : 0,
+                        opacity: canTrimEdges ? (linkedEditing ? 0.3 : 0.5) : 0,
                         pointerEvents: canTrimEdges ? 'auto' : 'none',
                         zIndex: canTrimEdges ? 25 : 0,
                       }}
@@ -2027,6 +2125,69 @@ export default function EditorPage() {
             </div>
           </div>
         </div>
+        {/* ── Assembly Quality Report ─────────────────────────────────── */}
+        {assemblyQc && (
+          <div className="mx-4 mt-2 mb-2 rounded-lg border text-xs"
+            style={{
+              borderColor: assemblyQc.pass ? 'var(--garden-border)' : 'var(--garden-warning)',
+              backgroundColor: assemblyQc.pass ? 'var(--garden-surface)' : 'rgba(255,180,0,0.07)',
+            }}
+          >
+            <div
+              className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none"
+              onClick={() => setAssemblyQcOpen(o => !o)}
+            >
+              <span style={{ color: assemblyQc.pass ? 'var(--garden-accent)' : 'var(--garden-warning)' }}>
+                {assemblyQc.pass ? '✓' : '⚠'}
+              </span>
+              <span className="font-semibold" style={{ color: 'var(--garden-text)' }}>
+                <span title="Scenes with on-screen hold ≥0.5s (readable cuts)">
+                  {assemblyQc.timing_pct ?? 0}% scenes ≥0.5s
+                </span>
+                <span className="font-normal text-[10px] ml-1" style={{ color: 'var(--garden-text-soft)' }}>
+                  · {assemblyQc.match_pct ?? 0}% strict NW match ({assemblyQc.matched}/{assemblyQc.total})
+                </span>
+              </span>
+              {assemblyQc.problem_scenes.length > 0 && (
+                <span className="ml-1" style={{ color: 'var(--garden-warning)' }}>
+                  — {assemblyQc.problem_scenes.length} problem scene{assemblyQc.problem_scenes.length > 1 ? 's' : ''}
+                </span>
+              )}
+              <div className="ml-auto flex items-center gap-1">
+                <button
+                  type="button"
+                  disabled={resyncPending}
+                  onClick={(e) => { e.stopPropagation(); void runResyncImages(); }}
+                  title="Re-run alignment and update all image positions from audio"
+                  className="text-xs px-2 py-0.5 rounded border disabled:opacity-50"
+                  style={{ borderColor: 'var(--garden-accent)', color: 'var(--garden-accent)', background: 'transparent' }}
+                >
+                  {resyncPending ? 'Re-syncing…' : '↺ Re-sync Images'}
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); void runValidateAssembly(); }}
+                  className="text-xs px-2 py-0.5 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)]"
+                >
+                  Re-check
+                </button>
+              </div>
+              <span style={{ color: 'var(--garden-text-soft)' }}>{assemblyQcOpen ? '▲' : '▼'}</span>
+            </div>
+            {assemblyQcOpen && (
+              <div className="px-3 pb-3 flex flex-col gap-1" style={{ color: 'var(--garden-text-soft)' }}>
+                <div>Avg scene duration: {assemblyQc.avg_duration_sec}s · Longest: {assemblyQc.max_duration_sec}s</div>
+                {assemblyQc.issues.map((iss, i) => (
+                  <div key={i} style={{ color: 'var(--garden-warning)' }}>• {iss}</div>
+                ))}
+                {assemblyQc.problem_scenes.length > 0 && (
+                  <div>Problem scene IDs: {assemblyQc.problem_scenes.join(', ')}</div>
+                )}
+                {assemblyQc.pass && <div style={{ color: 'var(--garden-accent)' }}>All checks passed — assembly looks correct.</div>}
+              </div>
+            )}
+          </div>
+        )}
       </main>
 
       {showExportOverlay && (

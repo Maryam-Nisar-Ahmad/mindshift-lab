@@ -1,4 +1,7 @@
-/** Align word timings within each cue when gaps are large (matches backend conditional snap). */
+/**
+ * Optional client-side snap for legacy saves. New pipeline: backend `build_subtitle_lines`
+ * is the single authority — do not re-apply after `generate-subtitles` unless repairing old state.
+ */
 
 export type SubtitleWord = { word: string; start: number; end: number };
 

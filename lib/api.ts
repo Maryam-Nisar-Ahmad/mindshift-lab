@@ -233,6 +233,16 @@ const NO_STORE_INIT: RequestInit = {
   },
 };
 
+/** Canonical narration duration from transcript JSON (aligned with assembly). */
+export async function getAudioTimelineDuration(id: string): Promise<{ duration_sec: number }> {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/audio-duration`, {
+    ...NO_STORE_INIT,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
+  return data as { duration_sec: number };
+}
+
 export async function generateSubtitles(id: string) {
   const res = await fetch(`${API}/api/projects/${pid(id)}/generate-subtitles`, {
     method: 'POST',

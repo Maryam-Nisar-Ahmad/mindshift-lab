@@ -47,12 +47,19 @@ def _normalize_ass_k_centis(words: list, line_start: float, line_end: float) -> 
         return []
     raw: list[int] = []
     for w in words:
-        start = float(w.get("start", line_start))
-        end = float(w.get("end", start))
-        raw.append(max(1, int(round((end - start) * 100))))
+        ws = float(w.get("start", line_start))
+        we = float(w.get("end", ws))
+        ws = max(line_start, min(ws, line_end))
+        we = max(ws, min(we, line_end))
+        raw.append(max(1, int(round((we - ws) * 100))))
     s = sum(raw)
     if s == total_target:
         return raw
+    # Avoid rescaling when word timings already match the cue within rounding (keeps lip-sync tighter).
+    if abs(s - total_target) <= 2 and s > 0:
+        out = list(raw)
+        out[-1] = max(1, out[-1] + (total_target - s))
+        return out
     if s <= 0:
         return [total_target]
     scaled = [max(1, int(round(c * total_target / s))) for c in raw]
@@ -167,15 +174,14 @@ def build_and_export(project_id, project_dir, editor_state, job_status):
         for idx, seg in enumerate(segments):
             end_t = float(seg.get("end", 0) or 0)
             start_t = float(seg.get("start", 0) or 0)
-            # Segment 0: the video starts at time 0 regardless of where the first ASR word falls.
-            # Using (end - start) would make every subsequent image transition early by exactly
-            # `start_t` seconds (e.g. 1 s of initial silence → all images 1 s early for the
-            # entire video).  Use end_t alone so the first image covers any leading silence and
-            # all subsequent image switches land on their exact audio timestamps.
-            if idx == 0:
-                dur = end_t
+            # Option B hold: image i stays on screen until image i+1 starts.
+            # This guarantees no black frames during inter-line narration pauses.
+            clip_start = 0.0 if idx == 0 else start_t
+            if idx < len(segments) - 1:
+                next_start = float(segments[idx + 1].get("start", end_t) or end_t)
+                dur = next_start - clip_start
             else:
-                dur = end_t - start_t
+                dur = end_t - clip_start
             if dur <= 0:
                 dur = 4.0
             # xfade overlaps clips by fade duration, which shortens the output vs the editor timeline.
@@ -263,16 +269,23 @@ def build_and_export(project_id, project_dir, editor_state, job_status):
         except ValueError:
             out_arg = str(output_path.resolve())
 
+        # Compute a safe output duration floor from all active timelines so subtitles/audio
+        # are not truncated when scene timings drift early.
+        timeline_floor = 0.0
+        if segments:
+            timeline_floor = max(timeline_floor, max(float(s.get("end", 0) or 0) for s in segments) + end_padding_seconds)
+        if shifted_subs:
+            timeline_floor = max(timeline_floor, max(float(line.get("end", 0) or 0) for line in shifted_subs))
+
         out_duration = editor_state.get("totalDuration")
         try:
             out_duration = float(out_duration) if out_duration is not None else None
         except (TypeError, ValueError):
             out_duration = None
         if out_duration is None or out_duration <= 0:
-            if segments:
-                out_duration = max(float(s.get("end", 0) or 0) for s in segments) + end_padding_seconds
-            else:
-                out_duration = None
+            out_duration = timeline_floor if timeline_floor > 0 else None
+        elif timeline_floor > 0:
+            out_duration = max(out_duration, timeline_floor)
 
         tail_opts: list = [
             "-c:v",
