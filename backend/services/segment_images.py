@@ -8,7 +8,8 @@ from pathlib import Path
 # Prefer JFIF first for Grok downloads, then common image formats.
 SEGMENT_IMAGE_EXTENSIONS = (".jfif", ".png", ".jpg", ".jpeg")
 
-# Grok / browser: download.jfif, download (1).jfif, download (2).jfif, …
+# Canonical (recommended): download (1).jfif, download (2).jfif, … (number = scene).
+# Legacy browser order: first save is bare download.jfif (scene 1), then download (1).jfif (scene 2), …
 _GROK_DOWNLOAD_RE = re.compile(
     r"^download(?:\s*\((\d+)\))?\s*(\.(?:jfif|jpe?g|png))$",
     re.IGNORECASE,
@@ -16,42 +17,53 @@ _GROK_DOWNLOAD_RE = re.compile(
 
 
 def grok_stem_for_segment_id(scene_id: int) -> str:
-    """Filename stem (no extension) for scene 1, 2, 3, … in Grok download order."""
+    """Filename stem (no extension): scene N → 'download (N)'."""
     if scene_id < 1:
         raise ValueError("scene_id must be >= 1")
-    if scene_id == 1:
-        return "download"
-    return f"download ({scene_id - 1})"
+    return f"download ({scene_id})"
 
 
-def _download_stem_for_segment(segment_id: int) -> str:
-    """Map segment id to Grok browser download stem."""
-    try:
-        return grok_stem_for_segment_id(int(segment_id))
-    except (TypeError, ValueError):
-        return "download"
+def grok_download_legacy_first_file(images_dir: Path) -> bool:
+    """True if images/ contains a bare 'download.ext' (browser's first save) — legacy scene-1 naming."""
+    d = Path(images_dir)
+    if not d.is_dir():
+        return False
+    for p in d.iterdir():
+        if not p.is_file():
+            continue
+        m = _GROK_DOWNLOAD_RE.match(p.name)
+        if m and m.group(1) is None:
+            return True
+    return False
 
 
-def scene_id_from_grok_download_basename(name: str) -> int | None:
+def scene_id_from_grok_download_basename(name: str, *, legacy_first_download: bool) -> int | None:
     """
     If name matches Grok download pattern, return 1-based scene id; else None.
-    download.jfif -> 1, download (1).jfif -> 2, download (28).jfif -> 29.
+
+    legacy_first_download: bare download.* → scene 1; download (k).* → scene k+1.
+    Otherwise (canonical): download (k).* → scene k; bare download.* → 1 if present.
     """
     m = _GROK_DOWNLOAD_RE.match(name)
     if not m:
         return None
     inner = m.group(1)
+    if legacy_first_download:
+        if inner is None:
+            return 1
+        return int(inner) + 1
     if inner is None:
         return 1
-    return int(inner) + 1
+    return int(inner)
 
 
-def _grok_files_for_scene_id(images_dir: Path, scene_id: int) -> list[Path]:
+def _grok_files_for_scene_id(images_dir: Path, scene_id: int, *, legacy_first_download: bool) -> list[Path]:
     d = Path(images_dir)
     return [
         p
         for p in d.iterdir()
-        if p.is_file() and scene_id_from_grok_download_basename(p.name) == scene_id
+        if p.is_file()
+        and scene_id_from_grok_download_basename(p.name, legacy_first_download=legacy_first_download) == scene_id
     ]
 
 
@@ -68,11 +80,12 @@ def insert_grok_download_slot(images_dir: Path, segment_id: int) -> list[dict[st
     if not d.is_dir():
         return []
 
+    legacy = grok_download_legacy_first_file(d)
     scene_ids: set[int] = set()
     for p in d.iterdir():
         if not p.is_file():
             continue
-        sid = scene_id_from_grok_download_basename(p.name)
+        sid = scene_id_from_grok_download_basename(p.name, legacy_first_download=legacy)
         if sid is not None:
             scene_ids.add(sid)
     if not scene_ids:
@@ -84,7 +97,7 @@ def insert_grok_download_slot(images_dir: Path, segment_id: int) -> list[dict[st
 
     renamed: list[dict[str, str]] = []
     for t in range(max_s, segment_id - 1, -1):
-        for path in _grok_files_for_scene_id(d, t):
+        for path in _grok_files_for_scene_id(d, t, legacy_first_download=legacy):
             new_name = grok_stem_for_segment_id(t + 1) + path.suffix.lower()
             new_path = d / new_name
             if new_path.exists() and new_path.resolve() != path.resolve():
@@ -104,7 +117,15 @@ def resolve_segment_image_basename(images_dir: Path | str, segment_id: int) -> s
         sid = int(segment_id)
     except (TypeError, ValueError):
         return None
-    stems = (str(sid), _download_stem_for_segment(sid))
+    legacy = grok_download_legacy_first_file(d)
+    stems: list[str] = [str(sid)]
+    if legacy:
+        if sid == 1:
+            stems.extend(("download", grok_stem_for_segment_id(sid)))
+        elif sid >= 2:
+            stems.extend((f"download ({sid - 1})", grok_stem_for_segment_id(sid)))
+    else:
+        stems.append(grok_stem_for_segment_id(sid))
     for stem in stems:
         for ext in SEGMENT_IMAGE_EXTENSIONS:
             name = stem + ext

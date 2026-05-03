@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { insertGrokImageSlot } from '@/lib/api';
 
 type PromptItem = {
@@ -65,6 +65,21 @@ function intentLine(text: string): string {
   return clean.length > 120 ? `${clean.slice(0, 117)}...` : clean;
 }
 
+function promptMatchesSearch(p: PromptItem, rawQuery: string): boolean {
+  const q = rawQuery.trim().toLowerCase();
+  if (!q) return true;
+  if (/^\d+$/.test(rawQuery.trim()) && p.segment_id === parseInt(rawQuery.trim(), 10)) {
+    return true;
+  }
+  const blob = [
+    String(p.segment_id),
+    (p.segment_text || '').toLowerCase(),
+    (p.mj_line || '').toLowerCase(),
+    (p.target_image || '').toLowerCase(),
+  ].join('\n');
+  return blob.includes(q);
+}
+
 /** Full prompts in document order, separated by a blank line (Grok batch paste/export). */
 function buildAllPromptsPlaintext(items: PromptItem[]): string {
   return items
@@ -84,6 +99,7 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate, promp
   const [selectedBatchIndex, setSelectedBatchIndex] = useState(0);
   const [slotInserting, setSlotInserting] = useState<number | null>(null);
   const [slotFeedback, setSlotFeedback] = useState<string | null>(null);
+  const [promptSearch, setPromptSearch] = useState('');
 
   useEffect(() => {
     setLocalPrompts([...prompts]);
@@ -96,15 +112,26 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate, promp
 
   const total = localPrompts.length;
   const sortedPrompts = [...localPrompts].sort((a, b) => a.segment_id - b.segment_id);
+  const filteredForView = useMemo(() => {
+    if (!promptSearch.trim()) return localPrompts;
+    return localPrompts.filter((p) => promptMatchesSearch(p, promptSearch)).sort((a, b) => a.segment_id - b.segment_id);
+  }, [localPrompts, promptSearch]);
+  const searchActive = Boolean(promptSearch.trim());
+  const viewTotal = filteredForView.length;
   const totalBatches = Math.max(1, Math.ceil(total / PROMPT_BATCH_SIZE));
-  const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
+  const totalPages = Math.max(1, Math.ceil(viewTotal / PER_PAGE));
   const start = (currentPage - 1) * PER_PAGE;
-  const pageItems = localPrompts.slice(start, start + PER_PAGE);
+  const pageItems = filteredForView.slice(start, start + PER_PAGE);
 
   useEffect(() => {
     setNextBatchStart((prev) => (prev < total ? prev : 0));
     setSelectedBatchIndex((prev) => (prev < totalBatches ? prev : 0));
   }, [total, totalBatches]);
+
+  useEffect(() => {
+    const tp = Math.max(1, Math.ceil(viewTotal / PER_PAGE));
+    setCurrentPage((p) => (p > tp ? tp : p));
+  }, [viewTotal]);
 
   const handleCopySequence = () => {
     if (total === 0) return;
@@ -121,7 +148,8 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate, promp
     const nextIdx = idx + 1;
     setSequenceIndex(nextIdx);
     saveSequenceIndex(projectId, nextIdx);
-    if (nextIdx < total) {
+    // Pagination follows filtered list when searching; sequence index follows full list — skip auto page jump.
+    if (!promptSearch.trim() && nextIdx < total) {
       const nextPage = Math.floor(nextIdx / PER_PAGE) + 1;
       if (nextPage !== currentPage) setCurrentPage(nextPage);
     }
@@ -167,6 +195,8 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate, promp
   };
 
   const unit = promptEngine === 'grok' ? 'Prompt' : 'Scene';
+  const unitLower = promptEngine === 'grok' ? 'prompt' : 'scene';
+  const fixGridPrompts = searchActive ? filteredForView : sortedPrompts;
   const seqLabel =
     sequenceIndex === 0
       ? `Copy ${unit} 1`
@@ -228,8 +258,7 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate, promp
   };
 
   const handleInsertGrokImageSlot = async (segmentId: number) => {
-    const label =
-      segmentId <= 1 ? 'download.jfif' : `download (${segmentId - 1}).jfif`;
+    const label = `download (${segmentId}).jfif`;
     if (
       !window.confirm(
         `Make an empty file slot for Prompt ${segmentId}?\n\nGrok-style files from this position onward in images/ will be renamed +1 (e.g. the old file for this slot → next name) so the missing file can be saved as ${label}.\n\nNumbered stills (1.png, 2.jpg, …) are not moved.`
@@ -269,7 +298,7 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate, promp
         <span className="font-semibold" style={{ color: 'var(--garden-text)' }}>
           {promptEngine === 'grok' ? 'Grok' : 'Midjourney'}
         </span>
-        : copy each line into your image tool. Save files in sequence as download.jfif, download (1).jfif, download (2).jfif, … into:
+        : copy each line into your image tool. Save files in sequence as download (1).jfif, download (2).jfif, download (3).jfif, … (scene number = number in parentheses) into:
         <br />
         D:/Goal/MindShift-Lab/frontend/videos/{projectId}/images/
       </div>
@@ -287,82 +316,91 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate, promp
         {seqLabel}
       </button>
 
-      <div className="grid grid-cols-3 gap-4">
-        {pageItems.map((seg) => {
-          const expanded = expandedIds.has(seg.segment_id);
-          const copied = copiedIds.has(seg.segment_id);
-          const loading = regenLoadingId === seg.segment_id;
-          return (
-            <div
-              key={seg.segment_id}
-              className="rounded-xl p-4 cursor-pointer border"
-              style={
-                copied
-                  ? {
-                      borderColor: 'var(--fun-bubble)',
-                      backgroundColor: 'color-mix(in srgb, var(--fun-bubble) 38%, var(--garden-card))',
-                    }
-                  : {
-                      borderColor: 'var(--garden-border)',
-                      backgroundColor: 'var(--garden-card)',
-                    }
-              }
-              onClick={() => handleToggleExpand(seg.segment_id)}
-            >
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <span
-                  className="rounded text-xs font-medium px-2 py-0.5 shrink-0"
-                  style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
-                >
-                  {promptEngine === 'grok' ? 'Prompt' : 'Scene'} {seg.segment_id}
-                </span>
-              </div>
-              <p
-                className="text-[11px] mb-2 rounded-md px-2 py-1"
-                style={{
-                  color: 'var(--garden-text)',
-                  backgroundColor: 'color-mix(in srgb, var(--garden-accent) 10%, transparent)',
-                }}
-                title={seg.segment_text}
+      {searchActive && viewTotal === 0 ? (
+        <p
+          className="rounded-lg border px-4 py-6 text-center text-sm"
+          style={{ borderColor: 'var(--garden-border)', color: 'var(--garden-text-soft)' }}
+        >
+          No prompts match your search. Try a {unitLower} number, a phrase from the script line, or words from the image prompt.
+        </p>
+      ) : (
+        <div className="grid grid-cols-3 gap-4">
+          {pageItems.map((seg) => {
+            const expanded = expandedIds.has(seg.segment_id);
+            const copied = copiedIds.has(seg.segment_id);
+            const loading = regenLoadingId === seg.segment_id;
+            return (
+              <div
+                key={seg.segment_id}
+                className="rounded-xl p-4 cursor-pointer border"
+                style={
+                  copied
+                    ? {
+                        borderColor: 'var(--fun-bubble)',
+                        backgroundColor: 'color-mix(in srgb, var(--fun-bubble) 38%, var(--garden-card))',
+                      }
+                    : {
+                        borderColor: 'var(--garden-border)',
+                        backgroundColor: 'var(--garden-card)',
+                      }
+                }
+                onClick={() => handleToggleExpand(seg.segment_id)}
               >
-                Target image: {intentLine(seg.target_image || seg.segment_text)}
-              </p>
-              <p
-                className={`font-mono text-xs mb-3 ${expanded ? '' : 'line-clamp-2'}`}
-                style={{ color: 'var(--garden-text-soft)' }}
-              >
-                {seg.mj_line}
-              </p>
-              <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                <button
-                  type="button"
-                  className="rounded border px-2 py-1 text-xs font-medium hover:bg-[color-mix(in_srgb,var(--garden-accent)_12%,transparent)]"
-                  style={{ borderColor: 'var(--garden-accent)', color: 'var(--garden-accent)' }}
-                  onClick={() => handleCopyCard(seg.segment_id, seg.mj_line)}
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <span
+                    className="rounded text-xs font-medium px-2 py-0.5 shrink-0"
+                    style={{ backgroundColor: 'var(--garden-accent)', color: 'var(--garden-cream)' }}
+                  >
+                    {promptEngine === 'grok' ? 'Prompt' : 'Scene'} {seg.segment_id}
+                  </span>
+                </div>
+                <p
+                  className="text-[11px] mb-2 rounded-md px-2 py-1"
+                  style={{
+                    color: 'var(--garden-text)',
+                    backgroundColor: 'color-mix(in srgb, var(--garden-accent) 10%, transparent)',
+                  }}
+                  title={seg.segment_text}
                 >
-                  Copy
-                </button>
-                <button
-                  type="button"
-                  className="rounded border px-2 py-1 text-xs font-medium hover:bg-[color-mix(in_srgb,var(--garden-warning)_14%,transparent)] disabled:opacity-50"
-                  style={{ borderColor: 'var(--garden-warning)', color: 'var(--garden-warning)' }}
-                  onClick={() => handleRegen(seg)}
-                  disabled={loading}
+                  Target image: {intentLine(seg.target_image || seg.segment_text)}
+                </p>
+                <p
+                  className={`font-mono text-xs mb-3 ${expanded ? '' : 'line-clamp-2'}`}
+                  style={{ color: 'var(--garden-text-soft)' }}
                 >
-                  {loading ? (
-                    <span
-                      className="inline-block h-3 w-3 border-2 rounded-full animate-spin border-t-transparent"
-                      style={{ borderColor: 'var(--garden-warning)' }}
-                    />
-                  ) : (
-                    'Regen'
-                  )}
-                </button>
+                  {seg.mj_line}
+                </p>
+                <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    className="rounded border px-2 py-1 text-xs font-medium hover:bg-[color-mix(in_srgb,var(--garden-accent)_12%,transparent)]"
+                    style={{ borderColor: 'var(--garden-accent)', color: 'var(--garden-accent)' }}
+                    onClick={() => handleCopyCard(seg.segment_id, seg.mj_line)}
+                  >
+                    Copy
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded border px-2 py-1 text-xs font-medium hover:bg-[color-mix(in_srgb,var(--garden-warning)_14%,transparent)] disabled:opacity-50"
+                    style={{ borderColor: 'var(--garden-warning)', color: 'var(--garden-warning)' }}
+                    onClick={() => handleRegen(seg)}
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <span
+                        className="inline-block h-3 w-3 border-2 rounded-full animate-spin border-t-transparent"
+                        style={{ borderColor: 'var(--garden-warning)' }}
+                      />
+                    ) : (
+                      'Regen'
+                    )}
+                  </button>
+                </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
       <div className="flex items-center justify-center gap-4 pt-4">
         <button
@@ -370,7 +408,7 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate, promp
           className="rounded px-3 py-1.5 text-sm disabled:opacity-50 border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)]"
           style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text-soft)' }}
           onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-          disabled={currentPage <= 1}
+          disabled={currentPage <= 1 || viewTotal === 0}
         >
           Prev
         </button>
@@ -382,7 +420,7 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate, promp
           className="rounded px-3 py-1.5 text-sm disabled:opacity-50 border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)]"
           style={{ backgroundColor: 'var(--garden-card)', color: 'var(--garden-text-soft)' }}
           onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-          disabled={currentPage >= totalPages}
+          disabled={currentPage >= totalPages || viewTotal === 0}
         >
           Next
         </button>
@@ -392,6 +430,56 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate, promp
 
   return (
     <div className="space-y-4">
+      {total > 0 ? (
+        <div
+          className="rounded-lg border p-3"
+          style={{ borderColor: 'var(--garden-border)', backgroundColor: 'var(--garden-card)' }}
+        >
+          <label className="block text-xs font-semibold mb-1.5" htmlFor={`prompt-search-${projectId}`} style={{ color: 'var(--garden-text)' }}>
+            Search prompts
+          </label>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+            <input
+              id={`prompt-search-${projectId}`}
+              type="search"
+              autoComplete="off"
+              className="min-w-0 flex-1 rounded-md border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--garden-accent)]"
+              style={{
+                borderColor: 'var(--garden-border)',
+                backgroundColor: 'var(--garden-cream, var(--garden-card))',
+                color: 'var(--garden-text)',
+              }}
+              placeholder={`${unit} #, words from the script line, or anything in the image prompt…`}
+              value={promptSearch}
+              onChange={(e) => {
+                setPromptSearch(e.target.value);
+                setCurrentPage(1);
+              }}
+            />
+            {promptSearch.trim() ? (
+              <button
+                type="button"
+                className="shrink-0 rounded-md border px-3 py-2 text-sm font-medium"
+                style={{ borderColor: 'var(--garden-border)', color: 'var(--garden-text-soft)' }}
+                onClick={() => {
+                  setPromptSearch('');
+                  setCurrentPage(1);
+                }}
+              >
+                Clear
+              </button>
+            ) : null}
+            <span className="text-xs shrink-0 sm:ml-auto" style={{ color: 'var(--garden-text-soft)' }}>
+              {searchActive
+                ? viewTotal === 0
+                  ? `No matches · ${total} total`
+                  : `Showing ${viewTotal} of ${total}`
+                : `${total} ${unitLower}${total === 1 ? '' : 's'}`}
+            </span>
+          </div>
+        </div>
+      ) : null}
+
       {promptEngine === 'grok' && total > 0 ? (
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -481,7 +569,7 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate, promp
               are not touched.
             </p>
             <div className="mb-2 grid max-h-64 grid-cols-5 gap-1.5 overflow-y-auto">
-              {sortedPrompts.map((p) => (
+              {fixGridPrompts.map((p) => (
                 <button
                   key={p.segment_id}
                   type="button"

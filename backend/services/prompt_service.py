@@ -9,6 +9,117 @@ from openai import AsyncOpenAI
 from .segment_service import split_script_to_segments
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Visual-cue helpers  (used when script_master.txt is saved alongside script.txt)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def parse_visual_cues_from_master(master_text: str) -> list[dict]:
+    """Parse (visual_cue, narration) pairs from a Claude-formatted master script.
+
+    Each [VISUAL CUE: ...] block is paired with the narration text that follows
+    it (up to the next [VISUAL CUE: ...] or end of file).
+
+    Safety guarantee: this function only READS the master script.
+    It never touches script.txt — the clean narration used for audio alignment.
+
+    Returns list of dicts: {'visual_cue': str, 'narration': str}.
+    """
+    # Split on every [VISUAL CUE: occurrence (case-insensitive)
+    parts = re.split(r'\[VISUAL CUE:', master_text, flags=re.IGNORECASE)
+    if len(parts) <= 1:
+        return []
+
+    pairs: list[dict] = []
+    # parts[0] is preamble/metadata before the first cue — skip it
+    for part in parts[1:]:
+        lines = part.split('\n')
+        cue_lines: list[str] = []
+        narration_lines: list[str] = []
+        in_cue = True
+
+        for line in lines:
+            stripped = line.strip()
+            if in_cue:
+                if not stripped:
+                    in_cue = False  # blank line ends the cue block
+                else:
+                    cue_lines.append(stripped.rstrip(']').strip())
+            else:
+                # Skip structural markers — they are not spoken narration
+                if (stripped.startswith('[') or stripped.startswith('★')
+                        or re.match(r'^(Phase|Front|Fix|★|\d+:\d+)', stripped)):
+                    continue
+                narration_lines.append(stripped)
+
+        cue_text = ' '.join(cue_lines).strip().rstrip(']').strip()
+        narration_text = ' '.join(l for l in narration_lines if l).strip()
+
+        # Skip false matches from the script's own legend/key section
+        # e.g. "[VISUAL CUE: …] = instruction to animator"
+        if not cue_text or len(cue_text) < 15:
+            continue
+        if cue_text.startswith(']') or '…' in cue_text[:5] or cue_text.startswith('='):
+            continue
+        # Skip if narration looks like a structural label rather than spoken text
+        if re.match(r'^(Target emotion|Phase|Fix \d|Front \d|Open|PATTERN|MID-VIDEO)', narration_text):
+            continue
+
+        pairs.append({'visual_cue': cue_text, 'narration': narration_text})
+
+    return pairs
+
+
+def match_visual_cues_to_segments(
+    segments: list[str],
+    cue_pairs: list[dict],
+) -> list[str | None]:
+    """For each clean-narration segment, find the best-matching visual cue.
+
+    Matching uses word-overlap between the segment text and the narration text
+    that followed each [VISUAL CUE] block in the master script.
+
+    Returns a list of visual_cue strings (or None when confidence is too low).
+
+    Safety: visual cues are returned as separate strings — they are NEVER
+    merged into segment_text, so the audio-alignment pipeline is untouched.
+    """
+    if not cue_pairs:
+        return [None] * len(segments)
+
+    _stop = {'the', 'a', 'an', 'and', 'or', 'in', 'on', 'at', 'to', 'of',
+             'is', 'it', 'its', 'that', 'this', 'was', 'are', 'for', 'with'}
+
+    def _words(text: str) -> set[str]:
+        tokens = re.sub(r'[^\w\s]', '', text.lower()).split()
+        return {t for t in tokens if t not in _stop and len(t) > 2}
+
+    cue_word_sets = [_words(p['narration']) for p in cue_pairs]
+
+    results: list[str | None] = []
+    for seg in segments:
+        seg_words = _words(seg)
+        if not seg_words:
+            results.append(None)
+            continue
+
+        best_score = 0.0
+        best_cue: str | None = None
+        for idx, cue_ws in enumerate(cue_word_sets):
+            if not cue_ws:
+                continue
+            overlap = len(seg_words & cue_ws)
+            # Normalize by segment word count — shorter segments still match
+            score = overlap / len(seg_words)
+            if score > best_score:
+                best_score = score
+                best_cue = cue_pairs[idx]['visual_cue']
+
+        # Require at least 20 % word overlap to avoid false matches
+        results.append(best_cue if best_score >= 0.20 else None)
+
+    return results
+
+
 def _repo_prompts_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "prompts"
 
@@ -112,15 +223,21 @@ THE CHARACTERS — 7 types, use the right one every time
 ════════════════════════════════════════════════════════════
 
 CHARACTER: Girl  ([CHARACTER_A] — the one who fixed her habits)
-  Description: "a young woman with [REDACTED], wearing a pink
-  oversized hoodie and [REDACTED], [REDACTED]"
+  CHARACTER ANCHORS (use ONLY the parts visible at the chosen shot scale):
+    hair  → "a young woman with [REDACTED]"
+    top   → "[REDACTED]"
+    bottom → "[REDACTED]"
+    shoes → "[REDACTED]"
   Emotional arc: starts tired → becomes calm and energised
   USE FOR: positive habits, morning routines, health wins, solution moments,
   hopeful scenes, self-improvement outcomes
 
 CHARACTER: Boy  ([CHARACTER_B] — the one still stuck)
-  Description: "a young man with [REDACTED], wearing a dark
-  charcoal hoodie and [REDACTED], [REDACTED]"
+  CHARACTER ANCHORS (use ONLY the parts visible at the chosen shot scale):
+    hair  → "a young man with [REDACTED]"
+    top   → "[REDACTED]"
+    bottom → "[REDACTED]"
+    shoes → "[REDACTED]"
   Emotional arc: groggy → stressed → exhausted → blank
   USE FOR: bad habits, phone addiction, skipping meals, work exhaustion,
   late nights, stress, fatigue, struggle moments
@@ -164,6 +281,27 @@ CHARACTER BALANCE RULES:
   — Scientist/Doctor appear whenever research is cited — this is critical
   — Never use the same character 3 times in a row. Force variety.
   — When script says "most people" or cites a percentage → use Crowd
+
+SHOT-SCOPED CHARACTER DESCRIPTION (CRITICAL — Grok renders EXACTLY what you write):
+  Grok strictly follows every word. If you name shoes in a close-up, Grok WILL include
+  shoes even though the frame cuts at the waist — ruining the composition. Only describe
+  what is actually visible at the chosen shot scale.
+
+  Close-up (face/hands/object): hair + expression only. NO hoodie colour, NO pants, NO shoes.
+  Medium shot (waist-up): hair + face + hoodie/top. NO pants, NO shoes.
+  Over-the-shoulder: hoodie back + hair. No face detail. No shoes.
+  Wide/establishing (full body): use the FULL character anchor (hair + top + bottom + shoes).
+  Bird's-eye: describe only what is visible looking straight down.
+
+  ANCHOR PARTS (mix in only what the frame shows):
+    [CHARACTER_A] → hair: "young woman with [REDACTED]"
+              top:  "[REDACTED]"
+              bottom: "[REDACTED]"
+              shoes: "[REDACTED]"
+    [CHARACTER_B]    → hair: "young man with [REDACTED]"
+              top:  "[REDACTED]"
+              bottom: "[REDACTED]"
+              shoes: "[REDACTED]"
 
 ════════════════════════════════════════════════════════════
 HOW TO SHOW RESEARCH SO IT LANDS
@@ -518,6 +656,7 @@ async def _mj_fetch_parsed_batch(
     *,
     system_prompt: str,
     is_grok: bool,
+    visual_cues: list[str | None] | None = None,
 ) -> dict[int, str]:
     batch = segments[lo:hi]
     if is_grok:
@@ -533,8 +672,13 @@ async def _mj_fetch_parsed_batch(
             'Within this batch, vary shot scale so you never output three consecutive identical types '
             '(wide-establishing vs medium vs close-up vs abstract/symbol). Honor ACT mood from STYLE SPEC.\n',
             'Generate one detailed self-contained image prompt for Grok for each narration segment below.\n',
-            'CRITICAL — STATELESS RENDERING: Each prompt is sent to Grok in a completely separate session with ZERO memory of any other prompt. Grok does not know what [CHARACTER_A] or [CHARACTER_B] look like unless you describe them fully in THIS prompt. Grok does not know the art style unless you state it in THIS prompt. Never write "[CHARACTER_B], as described" or "the same character." Never assume context from previous segments.\n',
-            'For EVERY prompt where [CHARACTER_A] appears: include "young woman, brown hair messy bun, bright [REDACTED], [REDACTED], [REDACTED]" in the character description. For EVERY prompt where [CHARACTER_B] appears: include "young man, [REDACTED], [REDACTED], grey-green joggers, [REDACTED]" in the character description. Do this for EVERY segment — not just the first one.\n',
+            'CRITICAL — STATELESS RENDERING: Each prompt is sent to Grok in a completely separate session with ZERO memory of any other prompt. Grok does not know what [CHARACTER_A] or [CHARACTER_B] look like unless you describe them in THIS prompt. Grok does not know the art style unless you state it in THIS prompt. Never write "[CHARACTER_B], as described" or "the same character." Never assume context from previous segments.\n',
+            'SHOT-SCOPED CHARACTER DESCRIPTION — Grok renders EXACTLY what you write. If you name shoes in a close-up, Grok WILL include shoes even though the frame cuts at the waist. ONLY include character detail that is VISIBLE at the chosen shot scale:\n'
+            '  • Close-up (face/hands): hair + expression only. NO hoodie, NO pants, NO shoes.\n'
+            '  • Medium shot (waist-up): hair + face + hoodie/top colour only. NO pants, NO shoes.\n'
+            '  • Wide/establishing (full body visible): include everything — hair, top, bottom, shoes.\n'
+            '  [CHARACTER_A] anchors: hair="young woman with [REDACTED]" | top="[REDACTED]" | bottom="[REDACTED]" | shoes="[REDACTED]"\n'
+            '  [CHARACTER_B] anchors: hair="young man with [REDACTED]" | top="[REDACTED]" | bottom="[REDACTED]" | shoes="[REDACTED]"\n',
             'Use SEGMENT [N]: headers; each block must include GROK_IMAGE_PROMPT as one flowing paragraph (no URLs, no CLI flags, no scene numbers in the prompt text).\n',
             'Also include TARGET_IMAGE: one concise single-line visual intent (8-18 words) describing exactly what best-match image should show.\n',
             'Brand-critical: every prompt must re-state the MindShift Lab on-screen identity — thin outline 2D anime with soft cel-shading, muted sets with clear character color reads, act-matched lighting (cool clinical / warm golden). Not generic anime wallpaper; not photoreal; not 3D game render.\n',
@@ -551,6 +695,16 @@ async def _mj_fetch_parsed_batch(
         global_idx = lo + i + 1
         lines.append(f'--- SEGMENT {global_idx} ---')
         lines.append(seg)
+        # Append visual cue hint when available — clearly labeled so DeepSeek
+        # treats it as image-composition guidance only, never as spoken narration.
+        if visual_cues is not None:
+            cue_idx = lo + i
+            if cue_idx < len(visual_cues) and visual_cues[cue_idx]:
+                lines.append(
+                    f'\n[DIRECTOR\'S NOTE — image composition hint, NOT part of the narration; '
+                    f'do NOT treat this as spoken text or include it in the prompt as dialogue]: '
+                    f'{visual_cues[cue_idx]}'
+                )
         lines.append('')
     user_message = '\n'.join(lines)
     # DeepSeek enforces a provider-side max_tokens cap (often 1–8192). Clamp
@@ -622,6 +776,7 @@ async def _mj_prompt_range(
     *,
     allow_retry_single: bool,
     image_provider: str,
+    visual_cues: list[str | None] | None = None,
 ) -> list[dict]:
     """One or more API calls covering [lo, hi). Splits recursively if output truncates."""
     is_grok = (image_provider or "midjourney").lower() == "grok"
@@ -630,17 +785,17 @@ async def _mj_prompt_range(
         return []
     try:
         parsed = await _mj_fetch_parsed_batch(
-            client, model, segments, lo, hi, system_prompt=system_prompt, is_grok=is_grok
+            client, model, segments, lo, hi, system_prompt=system_prompt, is_grok=is_grok, visual_cues=visual_cues
         )
     except Exception:
         # If a batch call is slow/fails, split and continue so one request never stalls the whole job.
         if hi - lo > 1:
             mid = lo + (hi - lo) // 2
             left = await _mj_prompt_range(
-                client, model, segments, lo, mid, allow_retry_single=True, image_provider=image_provider
+                client, model, segments, lo, mid, allow_retry_single=True, image_provider=image_provider, visual_cues=visual_cues
             )
             right = await _mj_prompt_range(
-                client, model, segments, mid, hi, allow_retry_single=True, image_provider=image_provider
+                client, model, segments, mid, hi, allow_retry_single=True, image_provider=image_provider, visual_cues=visual_cues
             )
             return left + right
         raise
@@ -651,16 +806,16 @@ async def _mj_prompt_range(
     if hi - lo > 1:
         mid = lo + (hi - lo) // 2
         left = await _mj_prompt_range(
-            client, model, segments, lo, mid, allow_retry_single=True, image_provider=image_provider
+            client, model, segments, lo, mid, allow_retry_single=True, image_provider=image_provider, visual_cues=visual_cues
         )
         right = await _mj_prompt_range(
-            client, model, segments, mid, hi, allow_retry_single=True, image_provider=image_provider
+            client, model, segments, mid, hi, allow_retry_single=True, image_provider=image_provider, visual_cues=visual_cues
         )
         return left + right
 
     if allow_retry_single:
         parsed2 = await _mj_fetch_parsed_batch(
-            client, model, segments, lo, hi, system_prompt=system_prompt, is_grok=is_grok
+            client, model, segments, lo, hi, system_prompt=system_prompt, is_grok=is_grok, visual_cues=visual_cues
         )
         rows2 = _rows_from_parsed_batch(segments, lo, hi, parsed2, image_provider=image_provider)
         if any((r.get('prompt_text') or '').strip() for r in rows2):
@@ -689,7 +844,14 @@ def _build_grok_line(prompt_text, _segment_id):
     return t
 
 
-async def generate_mj_prompts(project_id, script_text, job_status, image_provider: str = "midjourney", job_id: str | None = None):
+async def generate_mj_prompts(
+    project_id,
+    script_text,
+    job_status,
+    image_provider: str = "midjourney",
+    job_id: str | None = None,
+    master_script_path: Path | None = None,
+):
     from .job_store import job_put as _job_put
 
     def _persist():
@@ -714,6 +876,23 @@ async def generate_mj_prompts(project_id, script_text, job_status, image_provide
         _persist()
         return []
 
+    # ── Visual cue context (optional, toggle-controlled) ────────────────────
+    # Segments are ALWAYS split from the clean script.txt — visual cues are
+    # only passed to DeepSeek as a separate "director's note" hint.
+    # Audio alignment is 100% unaffected: it never sees this data.
+    visual_cues: list[str | None] | None = None
+    if master_script_path is not None and master_script_path.is_file():
+        try:
+            master_text = master_script_path.read_text(encoding='utf-8')
+            cue_pairs = parse_visual_cues_from_master(master_text)
+            if cue_pairs:
+                visual_cues = match_visual_cues_to_segments(segments, cue_pairs)
+                matched = sum(1 for c in visual_cues if c)
+                print(f"[prompt_service] Visual cues: {matched}/{n} segments matched from master script.")
+        except Exception as exc:
+            print(f"[prompt_service] Visual cue loading failed (non-fatal): {exc}")
+            visual_cues = None
+
     # Long scripts: pack requests by character budget, then recursively split any batch
     # that still truncates. Same SYSTEM_PROMPT and per-segment task as before.
     max_user_chars = max(2500, int(os.getenv('MJ_PROMPT_USER_MAX_CHARS', '4500')))
@@ -729,7 +908,7 @@ async def generate_mj_prompts(project_id, script_text, job_status, image_provide
     done = 0
     for lo, hi in packed:
         part = await _mj_prompt_range(
-            client, model, segments, lo, hi, allow_retry_single=True, image_provider=image_provider
+            client, model, segments, lo, hi, allow_retry_single=True, image_provider=image_provider, visual_cues=visual_cues
         )
         results.extend(part)
         done += hi - lo
@@ -751,10 +930,15 @@ async def regenerate_single_prompt(segment_text, segment_id, image_provider: str
             "VIDEO CONTEXT: Single-segment regeneration. Illustrate THIS segment words with full congruency; "
             "pick shot scale (wide/medium/close/abstract) appropriate to the beat and STYLE SPEC ACT.\n\n"
             "CRITICAL - STATELESS RENDERING: This prompt is sent to Grok in an isolated session with zero memory. "
-            "If [CHARACTER_A] appears: include young woman, brown hair messy bun, bright [REDACTED], [REDACTED], [REDACTED] verbatim. "
-            "If [CHARACTER_B] appears: include young man, [REDACTED], [REDACTED], grey-green joggers, [REDACTED] verbatim. "
             "Re-state the MindShift Lab art style (flat 2D anime, thin outlines, soft cel shading) in the prompt. "
             "End with the mandatory FINAL LINE from the Style Spec.\n\n"
+            "SHOT-SCOPED CHARACTER DESCRIPTION — include ONLY the character details visible at the chosen shot scale. "
+            "If you name shoes in a close-up, Grok WILL include shoes even though the frame cuts at the waist. "
+            "Close-up: hair + expression only, NO hoodie/pants/shoes. "
+            "Medium (waist-up): hair + face + hoodie/top only, NO pants, NO shoes. "
+            "Wide (full body): include everything. "
+            "[CHARACTER_A] anchors: hair='young woman with [REDACTED]', top='[REDACTED]', bottom='[REDACTED]', shoes='[REDACTED]'. "
+            "[CHARACTER_B] anchors: hair='young man with [REDACTED]', top='[REDACTED]', bottom='[REDACTED]', shoes='[REDACTED]'.\n\n"
             f"--- SEGMENT {segment_id} ---\n\n{segment_text}"
         )
     else:

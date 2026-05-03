@@ -152,6 +152,8 @@ export default function EditorPage() {
   const [transitions, setTransitions] = useState<Record<string, Transition>>({});
   const [subtitleSettings, setSubtitleSettings] = useState<SubtitleSettings>(DEFAULT_SUBTITLE_SETTINGS);
   const [hasSubtitles, setHasSubtitles] = useState(false);
+  /** When false, ffmpeg omits burned-in subtitles; cues still generated and saved for sync / sidecars. */
+  const [includeSubtitlesInExportVideo, setIncludeSubtitlesInExportVideo] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [totalDuration, setTotalDuration] = useState(0);
@@ -222,6 +224,7 @@ export default function EditorPage() {
     totalDuration,
     end_padding_seconds: END_PADDING_SECONDS,
     canvas_display_width: 1920 as number,
+    include_subtitles_in_export_video: true,
   });
   persistStateRef.current = {
     segments,
@@ -236,6 +239,7 @@ export default function EditorPage() {
     totalDuration,
     end_padding_seconds: END_PADDING_SECONDS,
     canvas_display_width: canvasRef.current?.offsetWidth ?? 1920,
+    include_subtitles_in_export_video: includeSubtitlesInExportVideo,
   };
 
   type AssemblyQc = {
@@ -297,8 +301,9 @@ export default function EditorPage() {
       totalDuration: overrideTotalDuration ?? totalDuration,
       end_padding_seconds: END_PADDING_SECONDS,
       canvas_display_width: canvasRef.current?.offsetWidth ?? 1920,
+      include_subtitles_in_export_video: includeSubtitlesInExportVideo,
     }),
-    [segments, parkedSegments, transitions, subtitleSettings, totalDuration],
+    [segments, parkedSegments, transitions, subtitleSettings, totalDuration, includeSubtitlesInExportVideo],
   );
 
   const runGenerateSubtitles = useCallback(async (overrideSegments?: Segment[], overrideTotalDuration?: number) => {
@@ -395,6 +400,9 @@ export default function EditorPage() {
           if (hasStoredOffset) merged.subtitle_offset_ms = Math.round(rawOff as number);
           setSubtitleSettings(merged);
         }
+
+        const rawIncludeSubs = editorState.include_subtitles_in_export_video;
+        setIncludeSubtitlesInExportVideo(rawIncludeSubs !== false);
 
         const maxEnd = finalSegments.length > 0
           ? Math.max(...finalSegments.map((seg) => seg.end))
@@ -989,11 +997,30 @@ export default function EditorPage() {
         >
           ←
         </button>
-        <span className="text-[color:var(--garden-text)] flex-1">Editor — {project.title}</span>
+        <span className="text-[color:var(--garden-text)] flex-1 min-w-0 truncate">Editor — {project.title}</span>
+        <label
+          className="mr-3 flex cursor-pointer items-center gap-2 shrink-0 text-xs text-[color:var(--garden-text-soft)] select-none"
+          title="Uncheck to export clean video with no burned-in captions. Subtitles stay in the project for sync and sidecar files."
+        >
+          <input
+            type="checkbox"
+            className="rounded border-[color:var(--garden-border)]"
+            checked={includeSubtitlesInExportVideo}
+            onChange={(e) => {
+              const next = e.target.checked;
+              setIncludeSubtitlesInExportVideo(next);
+              if (id) {
+                void saveEditorState(id, { ...persistStateRef.current, include_subtitles_in_export_video: next });
+              }
+            }}
+          />
+          <span className="hidden sm:inline">Subtitles on exported video</span>
+          <span className="sm:hidden">Subs on MP4</span>
+        </label>
         <button
           type="button"
           onClick={handleExportClick}
-          className="text-[color:var(--garden-text-soft)] hover:opacity-90 text-sm"
+          className="text-[color:var(--garden-text-soft)] hover:opacity-90 text-sm shrink-0"
         >
           Export
         </button>
@@ -1207,321 +1234,6 @@ export default function EditorPage() {
           />
         </div>
 
-        <div className="mx-4 mt-4 flex gap-4">
-          <div className="flex-[0.6] flex flex-col">
-            <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
-              <span className="text-[color:var(--garden-text)] font-semibold">Subtitles</span>
-              <div className="flex items-center gap-2">
-                {hasSubtitles && (
-                  <>
-                    <button
-                      type="button"
-                      disabled={subtitleGenPending}
-                      onClick={() => void runGenerateSubtitles()}
-                      className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] transition-colors disabled:opacity-50"
-                    >
-                      {subtitleGenPending ? 'Regenerating…' : 'Regenerate from audio'}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={subtitleGenPending}
-                      onClick={async () => {
-                        if (!id) return;
-                        if (autoSaveTimerRef.current) {
-                          clearTimeout(autoSaveTimerRef.current);
-                          autoSaveTimerRef.current = null;
-                        }
-                        const payload = {
-                          segments,
-                          parkedSegments,
-                          subtitles: [] as SubtitleLine[],
-                          transitions,
-                          subtitleSettings,
-                          has_subtitles: false,
-                          font_size: subtitleSettings.font_size,
-                          alignment: subtitleSettings.position,
-                          subtitle_offset_ms: subtitleSettings.subtitle_offset_ms ?? 0,
-                          totalDuration,
-                          end_padding_seconds: END_PADDING_SECONDS,
-                          canvas_display_width: canvasRef.current?.offsetWidth ?? 1920,
-                        };
-                        try {
-                          await saveEditorState(id, payload);
-                          setSubtitles([]);
-                          setHasSubtitles(false);
-                          showToast('All subtitles removed', 'success');
-                        } catch (err) {
-                          showToast(err instanceof Error ? err.message : 'Could not save', 'error');
-                        }
-                      }}
-                      className="text-[color:var(--garden-text-soft)] hover:text-red-400 text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-red-400/60 transition-colors disabled:opacity-50"
-                    >
-                      Remove all subtitles
-                    </button>
-                  </>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setSubtitlesPanelOpen(o => !o)}
-                  className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] transition-colors"
-                >
-                  {subtitlesPanelOpen ? '▲ Hide' : '▼ Show'}
-                </button>
-              </div>
-            </div>
-            {subtitlesPanelOpen && (
-            <>
-            {!hasSubtitles ? (
-              <div className="flex flex-col gap-2">
-                <button
-                  type="button"
-                  disabled={subtitleGenPending}
-                  onClick={() => void runGenerateSubtitles()}
-                  className="rounded px-4 py-2 text-sm font-medium text-[color:var(--garden-cream)] w-fit disabled:opacity-60"
-                  style={{ backgroundColor: 'var(--garden-accent)' }}
-                >
-                  {subtitleGenPending ? 'Generating from transcript…' : 'Generate Subtitles'}
-                </button>
-                {subtitleGenPending && (
-                  <p className="text-xs text-[color:var(--garden-text-soft)]">
-                    Building fresh captions from your audio file (not from an old save).
-                  </p>
-                )}
-              </div>
-            ) : (
-              <>
-                <div className="flex flex-wrap items-center gap-3 mb-2">
-                  <label className="flex items-center gap-2">
-                    <span className="text-[color:var(--garden-text-soft)] text-sm">Font Size</span>
-                    <input
-                      type="range"
-                      min={24}
-                      max={72}
-                      value={subtitleSettings.font_size}
-                      onChange={(e) => {
-                        setSubtitleSettings((s) => ({ ...s, font_size: Number(e.target.value) }));
-                        autoSave();
-                      }}
-                      className="accent-[color:var(--garden-accent)]"
-                    />
-                    <span className="text-[color:var(--garden-text-soft)] text-xs font-mono w-6">{subtitleSettings.font_size}</span>
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <span className="text-[color:var(--garden-text-soft)] text-xs">Y Position %</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={subtitleSettings.positionY ?? 88}
-                      onChange={(e) => {
-                        setSubtitleSettings((prev) => ({ ...prev, positionY: Number(e.target.value) }));
-                        autoSave();
-                      }}
-                      className="w-16 bg-[var(--garden-surface)] border border-[color:var(--garden-border)] rounded text-[color:var(--garden-text)] text-xs px-2 py-1"
-                    />
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <span className="text-[color:var(--garden-text-soft)] text-sm">Color</span>
-                    <input
-                      type="color"
-                      value={subtitleSettings.color}
-                      onChange={(e) => {
-                        setSubtitleSettings((s) => ({ ...s, color: e.target.value }));
-                        autoSave();
-                      }}
-                      className="w-8 h-8 rounded border border-[color:var(--garden-border)] cursor-pointer"
-                    />
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <span className="text-[color:var(--garden-text-soft)] text-sm">Highlight</span>
-                    <input
-                      type="checkbox"
-                      checked={subtitleSettings.highlight_enabled}
-                      onChange={e => setSubtitleSettings(s => ({...s, highlight_enabled: e.target.checked}))}
-                    />
-                    <input
-                      type="color"
-                      value={subtitleSettings.highlight_color}
-                      onChange={e => setSubtitleSettings(s => ({...s, highlight_color: e.target.value}))}
-                      style={{ width: '32px', height: '24px', padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
-                    />
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <span className="text-[color:var(--garden-text-soft)] text-sm">Outline</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={12}
-                      step={1}
-                      value={subtitleSettings.outline_width ?? 4}
-                      onChange={e => setSubtitleSettings(s => ({...s, outline_width: Number(e.target.value)}))}
-                      className="w-24 accent-[color:var(--garden-accent)]"
-                    />
-                    <span className="text-[color:var(--garden-step-muted)] text-xs">{subtitleSettings.outline_width ?? 4}px</span>
-                  </label>
-                  <label className="flex items-center gap-2 flex-wrap">
-                    <span className="text-[color:var(--garden-text-soft)] text-xs whitespace-nowrap" title="Shifts all cues vs video/audio for export and preview">
-                      Timing offset (ms)
-                    </span>
-                    <input
-                      type="number"
-                      min={-3000}
-                      max={3000}
-                      step={10}
-                      value={subtitleSettings.subtitle_offset_ms ?? 0}
-                      onChange={(e) => {
-                        const n = Number(e.target.value);
-                        setSubtitleSettings((s) => ({
-                          ...s,
-                          subtitle_offset_ms: Number.isFinite(n) ? Math.round(n) : 0,
-                        }));
-                        autoSave();
-                      }}
-                      className="w-20 bg-[var(--garden-surface)] border border-[color:var(--garden-border)] rounded text-[color:var(--garden-text)] text-xs px-2 py-1"
-                    />
-                  </label>
-                </div>
-                <div className="max-h-64 overflow-y-auto space-y-1">
-                  {subtitles.map((line, idx) => (
-                    <div
-                      key={idx}
-                      className="rounded p-2 flex gap-3 cursor-pointer hover:bg-[var(--garden-surface)]"
-                      onClick={() => setCurrentTime(line.start)}
-                    >
-                      <span className="text-[color:var(--garden-text-soft)] text-xs font-mono flex-shrink-0">
-                        {formatTime(line.start)}
-                      </span>
-                      <span
-                        contentEditable
-                        suppressContentEditableWarning
-                        className="text-[color:var(--garden-text)] flex-1 outline-none"
-                        onBlur={(e) => handleEdit(idx, e.currentTarget.textContent ?? '')}
-                      >
-                        {line.text}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-            </>
-            )}
-          </div>
-          <div className="flex-[0.4] flex flex-col">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-[color:var(--garden-text)] font-semibold">Transitions</span>
-              <button
-                onClick={() => setTransitionsPanelOpen(o => !o)}
-                className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] transition-colors"
-              >
-                {transitionsPanelOpen ? '▲ Hide' : '▼ Show'}
-              </button>
-            </div>
-            {transitionsPanelOpen && (
-            <>
-            <div className="flex items-center gap-2 mb-2 flex-wrap">
-              <select
-                value={globalFadeDuration}
-                onChange={e => setGlobalFadeDuration(Number(e.target.value))}
-                className="rounded bg-[var(--garden-surface)] border border-[color:var(--garden-border)] text-[color:var(--garden-text)] text-xs px-2 py-1"
-              >
-                <option value={0.1}>0.1s</option>
-                <option value={0.2}>0.2s</option>
-                <option value={0.3}>0.3s</option>
-                <option value={0.5}>0.5s</option>
-                <option value={0.8}>0.8s</option>
-                <option value={1.0}>1.0s</option>
-                <option value={1.5}>1.5s</option>
-              </select>
-              <button
-                type="button"
-                onClick={() => {
-                  const next: Record<string, Transition> = {};
-                  segments.forEach((seg, i) => {
-                    if (i < segments.length - 1) {
-                      const key = String(i) + '-' + String(i + 1);
-                      next[key] = { type: 'fade', duration: globalFadeDuration };
-                    }
-                  });
-                  saveToHistory();
-                  setTransitions(next);
-                  autoSave();
-                }}
-                className="rounded border border-[color:var(--garden-accent)] text-[color:var(--garden-accent)] text-xs px-2 py-1 hover:bg-[color-mix(in_srgb,var(--garden-accent)_12%,transparent)]"
-              >
-                Apply Fade to All
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const next: Record<string, Transition> = {};
-                  segments.forEach((seg, i) => {
-                    if (i < segments.length - 1) {
-                      const key = String(i) + '-' + String(i + 1);
-                      next[key] = { type: 'none', duration: 0.5 };
-                    }
-                  });
-                  saveToHistory();
-                  setTransitions(next);
-                  autoSave();
-                }}
-                className="rounded border border-[color:var(--garden-danger)] text-[color:var(--garden-danger)] text-xs px-2 py-1 hover:bg-[color-mix(in_srgb,var(--garden-danger)_12%,transparent)]"
-              >
-                Unapply Fade to All
-              </button>
-            </div>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {segments.length > 1 &&
-                Array.from({ length: segments.length - 1 }, (_, i) => {
-                  const key = `${i}-${i + 1}`;
-                  const t = transitions[key] ?? { type: 'none' as const, duration: 0.5 };
-                  return (
-                    <div key={key} className="flex flex-col gap-1">
-                      <span className="text-[color:var(--garden-text-soft)] text-xs">
-                        Scene {i + 1} -&gt; Scene {i + 2}
-                      </span>
-                      <select
-                        value={t.type}
-                        onChange={(e) => {
-                          const type = e.target.value as 'none' | 'fade';
-                          saveToHistory();
-                          setTransitions((prev) => ({
-                            ...prev,
-                            [key]: { type, duration: type === 'fade' ? (t.duration ?? 0.5) : 0.5 },
-                          }));
-                          autoSave();
-                        }}
-                        className="rounded bg-[var(--garden-surface)] border border-[color:var(--garden-border)] text-[color:var(--garden-text)] text-sm px-2 py-1"
-                      >
-                        <option value="none">None</option>
-                        <option value="fade">Fade</option>
-                      </select>
-                      {t.type === 'fade' && (
-                        <input
-                          type="range"
-                          min={0.3}
-                          max={1.5}
-                          step={0.1}
-                          value={t.duration ?? 0.5}
-                          onChange={(e) => {
-                            saveToHistory();
-                            setTransitions((prev) => ({
-                              ...prev,
-                              [key]: { type: 'fade', duration: Number(e.target.value) },
-                            }));
-                            autoSave();
-                          }}
-                          className="accent-[color:var(--garden-accent)]"
-                        />
-                      )}
-                    </div>
-                  );
-                })}
-            </div>
-            </>
-            )}
-          </div>
-        </div>
         <div className="mt-4 mx-4 rounded-xl" style={{ backgroundColor: 'var(--garden-timeline)' }}>
           <div className="flex items-center gap-2 px-2 py-1">
             <button
@@ -2123,6 +1835,321 @@ export default function EditorPage() {
               </div>
             </div>
             </div>
+          </div>
+        </div>
+        <div className="mx-4 mt-4 flex gap-4">
+          <div className="flex-[0.6] flex flex-col">
+            <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+              <span className="text-[color:var(--garden-text)] font-semibold">Subtitles</span>
+              <div className="flex items-center gap-2">
+                {hasSubtitles && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={subtitleGenPending}
+                      onClick={() => void runGenerateSubtitles()}
+                      className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] transition-colors disabled:opacity-50"
+                    >
+                      {subtitleGenPending ? 'Regenerating…' : 'Regenerate from audio'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={subtitleGenPending}
+                      onClick={async () => {
+                        if (!id) return;
+                        if (autoSaveTimerRef.current) {
+                          clearTimeout(autoSaveTimerRef.current);
+                          autoSaveTimerRef.current = null;
+                        }
+                        const payload = {
+                          segments,
+                          parkedSegments,
+                          subtitles: [] as SubtitleLine[],
+                          transitions,
+                          subtitleSettings,
+                          has_subtitles: false,
+                          font_size: subtitleSettings.font_size,
+                          alignment: subtitleSettings.position,
+                          subtitle_offset_ms: subtitleSettings.subtitle_offset_ms ?? 0,
+                          totalDuration,
+                          end_padding_seconds: END_PADDING_SECONDS,
+                          canvas_display_width: canvasRef.current?.offsetWidth ?? 1920,
+                        };
+                        try {
+                          await saveEditorState(id, payload);
+                          setSubtitles([]);
+                          setHasSubtitles(false);
+                          showToast('All subtitles removed', 'success');
+                        } catch (err) {
+                          showToast(err instanceof Error ? err.message : 'Could not save', 'error');
+                        }
+                      }}
+                      className="text-[color:var(--garden-text-soft)] hover:text-red-400 text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-red-400/60 transition-colors disabled:opacity-50"
+                    >
+                      Remove all subtitles
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSubtitlesPanelOpen(o => !o)}
+                  className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] transition-colors"
+                >
+                  {subtitlesPanelOpen ? '▲ Hide' : '▼ Show'}
+                </button>
+              </div>
+            </div>
+            {subtitlesPanelOpen && (
+            <>
+            {!hasSubtitles ? (
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  disabled={subtitleGenPending}
+                  onClick={() => void runGenerateSubtitles()}
+                  className="rounded px-4 py-2 text-sm font-medium text-[color:var(--garden-cream)] w-fit disabled:opacity-60"
+                  style={{ backgroundColor: 'var(--garden-accent)' }}
+                >
+                  {subtitleGenPending ? 'Generating from transcript…' : 'Generate Subtitles'}
+                </button>
+                {subtitleGenPending && (
+                  <p className="text-xs text-[color:var(--garden-text-soft)]">
+                    Building fresh captions from your audio file (not from an old save).
+                  </p>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center gap-3 mb-2">
+                  <label className="flex items-center gap-2">
+                    <span className="text-[color:var(--garden-text-soft)] text-sm">Font Size</span>
+                    <input
+                      type="range"
+                      min={24}
+                      max={72}
+                      value={subtitleSettings.font_size}
+                      onChange={(e) => {
+                        setSubtitleSettings((s) => ({ ...s, font_size: Number(e.target.value) }));
+                        autoSave();
+                      }}
+                      className="accent-[color:var(--garden-accent)]"
+                    />
+                    <span className="text-[color:var(--garden-text-soft)] text-xs font-mono w-6">{subtitleSettings.font_size}</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <span className="text-[color:var(--garden-text-soft)] text-xs">Y Position %</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={subtitleSettings.positionY ?? 88}
+                      onChange={(e) => {
+                        setSubtitleSettings((prev) => ({ ...prev, positionY: Number(e.target.value) }));
+                        autoSave();
+                      }}
+                      className="w-16 bg-[var(--garden-surface)] border border-[color:var(--garden-border)] rounded text-[color:var(--garden-text)] text-xs px-2 py-1"
+                    />
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <span className="text-[color:var(--garden-text-soft)] text-sm">Color</span>
+                    <input
+                      type="color"
+                      value={subtitleSettings.color}
+                      onChange={(e) => {
+                        setSubtitleSettings((s) => ({ ...s, color: e.target.value }));
+                        autoSave();
+                      }}
+                      className="w-8 h-8 rounded border border-[color:var(--garden-border)] cursor-pointer"
+                    />
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <span className="text-[color:var(--garden-text-soft)] text-sm">Highlight</span>
+                    <input
+                      type="checkbox"
+                      checked={subtitleSettings.highlight_enabled}
+                      onChange={e => setSubtitleSettings(s => ({...s, highlight_enabled: e.target.checked}))}
+                    />
+                    <input
+                      type="color"
+                      value={subtitleSettings.highlight_color}
+                      onChange={e => setSubtitleSettings(s => ({...s, highlight_color: e.target.value}))}
+                      style={{ width: '32px', height: '24px', padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                    />
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <span className="text-[color:var(--garden-text-soft)] text-sm">Outline</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={12}
+                      step={1}
+                      value={subtitleSettings.outline_width ?? 4}
+                      onChange={e => setSubtitleSettings(s => ({...s, outline_width: Number(e.target.value)}))}
+                      className="w-24 accent-[color:var(--garden-accent)]"
+                    />
+                    <span className="text-[color:var(--garden-step-muted)] text-xs">{subtitleSettings.outline_width ?? 4}px</span>
+                  </label>
+                  <label className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[color:var(--garden-text-soft)] text-xs whitespace-nowrap" title="Shifts all cues vs video/audio for export and preview">
+                      Timing offset (ms)
+                    </span>
+                    <input
+                      type="number"
+                      min={-3000}
+                      max={3000}
+                      step={10}
+                      value={subtitleSettings.subtitle_offset_ms ?? 0}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        setSubtitleSettings((s) => ({
+                          ...s,
+                          subtitle_offset_ms: Number.isFinite(n) ? Math.round(n) : 0,
+                        }));
+                        autoSave();
+                      }}
+                      className="w-20 bg-[var(--garden-surface)] border border-[color:var(--garden-border)] rounded text-[color:var(--garden-text)] text-xs px-2 py-1"
+                    />
+                  </label>
+                </div>
+                <div className="max-h-64 overflow-y-auto space-y-1">
+                  {subtitles.map((line, idx) => (
+                    <div
+                      key={idx}
+                      className="rounded p-2 flex gap-3 cursor-pointer hover:bg-[var(--garden-surface)]"
+                      onClick={() => setCurrentTime(line.start)}
+                    >
+                      <span className="text-[color:var(--garden-text-soft)] text-xs font-mono flex-shrink-0">
+                        {formatTime(line.start)}
+                      </span>
+                      <span
+                        contentEditable
+                        suppressContentEditableWarning
+                        className="text-[color:var(--garden-text)] flex-1 outline-none"
+                        onBlur={(e) => handleEdit(idx, e.currentTarget.textContent ?? '')}
+                      >
+                        {line.text}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            </>
+            )}
+          </div>
+          <div className="flex-[0.4] flex flex-col">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-[color:var(--garden-text)] font-semibold">Transitions</span>
+              <button
+                onClick={() => setTransitionsPanelOpen(o => !o)}
+                className="text-[color:var(--garden-text-soft)] hover:text-[color:var(--garden-text)] text-xs px-2 py-1 rounded border border-[color:var(--garden-border)] hover:border-[color:var(--garden-accent)] transition-colors"
+              >
+                {transitionsPanelOpen ? '▲ Hide' : '▼ Show'}
+              </button>
+            </div>
+            {transitionsPanelOpen && (
+            <>
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <select
+                value={globalFadeDuration}
+                onChange={e => setGlobalFadeDuration(Number(e.target.value))}
+                className="rounded bg-[var(--garden-surface)] border border-[color:var(--garden-border)] text-[color:var(--garden-text)] text-xs px-2 py-1"
+              >
+                <option value={0.1}>0.1s</option>
+                <option value={0.2}>0.2s</option>
+                <option value={0.3}>0.3s</option>
+                <option value={0.5}>0.5s</option>
+                <option value={0.8}>0.8s</option>
+                <option value={1.0}>1.0s</option>
+                <option value={1.5}>1.5s</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  const next: Record<string, Transition> = {};
+                  segments.forEach((seg, i) => {
+                    if (i < segments.length - 1) {
+                      const key = String(i) + '-' + String(i + 1);
+                      next[key] = { type: 'fade', duration: globalFadeDuration };
+                    }
+                  });
+                  saveToHistory();
+                  setTransitions(next);
+                  autoSave();
+                }}
+                className="rounded border border-[color:var(--garden-accent)] text-[color:var(--garden-accent)] text-xs px-2 py-1 hover:bg-[color-mix(in_srgb,var(--garden-accent)_12%,transparent)]"
+              >
+                Apply Fade to All
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const next: Record<string, Transition> = {};
+                  segments.forEach((seg, i) => {
+                    if (i < segments.length - 1) {
+                      const key = String(i) + '-' + String(i + 1);
+                      next[key] = { type: 'none', duration: 0.5 };
+                    }
+                  });
+                  saveToHistory();
+                  setTransitions(next);
+                  autoSave();
+                }}
+                className="rounded border border-[color:var(--garden-danger)] text-[color:var(--garden-danger)] text-xs px-2 py-1 hover:bg-[color-mix(in_srgb,var(--garden-danger)_12%,transparent)]"
+              >
+                Unapply Fade to All
+              </button>
+            </div>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {segments.length > 1 &&
+                Array.from({ length: segments.length - 1 }, (_, i) => {
+                  const key = `${i}-${i + 1}`;
+                  const t = transitions[key] ?? { type: 'none' as const, duration: 0.5 };
+                  return (
+                    <div key={key} className="flex flex-col gap-1">
+                      <span className="text-[color:var(--garden-text-soft)] text-xs">
+                        Scene {i + 1} -&gt; Scene {i + 2}
+                      </span>
+                      <select
+                        value={t.type}
+                        onChange={(e) => {
+                          const type = e.target.value as 'none' | 'fade';
+                          saveToHistory();
+                          setTransitions((prev) => ({
+                            ...prev,
+                            [key]: { type, duration: type === 'fade' ? (t.duration ?? 0.5) : 0.5 },
+                          }));
+                          autoSave();
+                        }}
+                        className="rounded bg-[var(--garden-surface)] border border-[color:var(--garden-border)] text-[color:var(--garden-text)] text-sm px-2 py-1"
+                      >
+                        <option value="none">None</option>
+                        <option value="fade">Fade</option>
+                      </select>
+                      {t.type === 'fade' && (
+                        <input
+                          type="range"
+                          min={0.3}
+                          max={1.5}
+                          step={0.1}
+                          value={t.duration ?? 0.5}
+                          onChange={(e) => {
+                            saveToHistory();
+                            setTransitions((prev) => ({
+                              ...prev,
+                              [key]: { type: 'fade', duration: Number(e.target.value) },
+                            }));
+                            autoSave();
+                          }}
+                          className="accent-[color:var(--garden-accent)]"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
+            </>
+            )}
           </div>
         </div>
         {/* ── Assembly Quality Report ─────────────────────────────────── */}

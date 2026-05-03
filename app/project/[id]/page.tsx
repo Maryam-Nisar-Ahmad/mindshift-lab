@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getProject, resetStep, deleteProject, getPromptTemplate, updateTitle, stepComplete, cleanScript, saveScript, getPrompts, generatePrompts, getJobStatus, checkImages, regeneratePrompt, fileUrl, uploadAudio, getAudioStatus, assembleSegments, getSeoData, saveSeoData, generateSeoData, patchImageProvider, patchPipelineSettings, generateThumbnailPrompts, getThumbnailPrompts, generateVideoTitle, getGrokImageSystemPrompt, type SeoDataPayload, type AltTitle, type ThumbnailPromptVariant } from '@/lib/api';
+import { getProject, resetStep, deleteProject, getPromptTemplate, updateTitle, stepComplete, cleanScript, saveScript, saveMasterScript, getPrompts, generatePrompts, getJobStatus, checkImages, regeneratePrompt, fileUrl, uploadAudio, getAudioStatus, assembleSegments, getSeoData, saveSeoData, generateSeoData, patchImageProvider, patchPipelineSettings, generateThumbnailPrompts, getThumbnailPrompts, generateVideoTitle, getGrokImageSystemPrompt, type SeoDataPayload, type AltTitle, type ThumbnailPromptVariant } from '@/lib/api';
 import { projectIdFromParams, encodeProjectIdForRoute } from '@/lib/projectId';
 import useToast from '@/hooks/useToast';
 import Toast from '@/components/Toast';
@@ -177,6 +177,12 @@ export default function ProjectPage() {
   const [step1Copied, setStep1Copied] = useState(false);
   // step2aCopied removed — Part A Perplexity step reverted
   const [step2Copied, setStep2Copied] = useState(false);
+  // Visual cues toggle — persisted in localStorage so it survives page reload
+  const [useVisualCues, setUseVisualCues] = useState<boolean>(() => {
+    try { return localStorage.getItem('mindshift_use_visual_cues') === 'true'; } catch { return false; }
+  });
+  const [masterSaved, setMasterSaved] = useState(false);
+  const [masterSaving, setMasterSaving] = useState(false);
   const [step3Prompts, setStep3Prompts] = useState<{ segment_id: number; segment_text: string; target_image?: string; mj_line: string }[] | null>(null);
   const [step3JobId, setStep3JobId] = useState<string | null>(null);
   const [step3JobStatusText, setStep3JobStatusText] = useState('');
@@ -858,7 +864,51 @@ export default function ProjectPage() {
                         className="mt-3 w-full h-64 rounded font-mono text-sm resize-y border focus:border-[color:var(--garden-accent)] focus:outline-none"
                         style={{ backgroundColor: 'var(--garden-surface)', borderColor: 'var(--garden-border)' }}
                       />
-                      <div className="mt-2 flex gap-2">
+                      {/* Visual cues toggle */}
+                      <div className="mt-3 flex items-center gap-2">
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={useVisualCues}
+                          onClick={() => {
+                            const next = !useVisualCues;
+                            setUseVisualCues(next);
+                            try { localStorage.setItem('mindshift_use_visual_cues', String(next)); } catch { /* noop */ }
+                          }}
+                          className="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none"
+                          style={{ backgroundColor: useVisualCues ? 'var(--garden-accent)' : 'var(--garden-border)' }}
+                        >
+                          <span
+                            className="inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200"
+                            style={{ transform: useVisualCues ? 'translateX(16px)' : 'translateX(0)' }}
+                          />
+                        </button>
+                        <span className="text-xs" style={{ color: 'var(--garden-text-soft)' }}>
+                          Pass visual cues to DeepSeek
+                          <span className="ml-1 rounded px-1 text-[10px]" style={{ backgroundColor: 'var(--garden-warning)', color: '#000', opacity: 0.7 }}>experimental</span>
+                        </span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {/* Save Full Script — only shown when toggle is on */}
+                        {useVisualCues && (
+                          <button
+                            type="button"
+                            disabled={masterSaving || !step2Script.trim()}
+                            className="rounded-xl px-3 py-1.5 text-sm font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
+                            style={{ backgroundColor: '#6b46c1' }}
+                            title="Save the full Claude output (with visual cues) for DeepSeek context. Do this BEFORE clicking Clean with AI."
+                            onClick={() => {
+                              if (!id || !step2Script.trim()) return;
+                              setMasterSaving(true);
+                              saveMasterScript(id, step2Script)
+                                .then(() => { setMasterSaved(true); showToast('Full script saved for DeepSeek ✓', 'success'); setTimeout(() => setMasterSaved(false), 3000); })
+                                .catch((err) => showToast(err instanceof Error ? err.message : 'Failed to save', 'error'))
+                                .finally(() => setMasterSaving(false));
+                            }}
+                          >
+                            {masterSaving ? 'Saving…' : masterSaved ? '✓ Full Script Saved' : '① Save Full Script'}
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="rounded-xl px-3 py-1.5 text-sm font-medium text-white transition-colors hover:opacity-90"
@@ -870,7 +920,7 @@ export default function ProjectPage() {
                               .catch((err) => showToast(err instanceof Error ? err.message : 'Clean failed', 'error'));
                           }}
                         >
-                          Clean with AI
+                          {useVisualCues ? '② Clean with AI' : 'Clean with AI'}
                         </button>
                         <button
                           type="button"
@@ -884,7 +934,7 @@ export default function ProjectPage() {
                               .catch((err) => showToast(err instanceof Error ? err.message : 'Failed to save script', 'error'));
                           }}
                         >
-                          Save Script
+                          {useVisualCues ? '③ Save Script' : 'Save Script'}
                         </button>
                       </div>
                     </>
@@ -958,7 +1008,7 @@ export default function ProjectPage() {
                           style={{ backgroundColor: '#ae5fd7' }}
                           onClick={() => {
                             if (!id) return;
-                            generatePrompts(id)
+                            generatePrompts(id, useVisualCues)
                               .then((r: { job_id?: string }) => {
                                 if (r?.job_id) {
                                   setStep3JobId(r.job_id);
@@ -976,8 +1026,8 @@ export default function ProjectPage() {
                   {num === 3.5 && (
                     <>
                       <p className="mt-4 text-sm" style={{ color: 'var(--garden-text-soft)' }}>
-                        Save stills into images/ as <code className="text-[11px]">download.jfif</code>,{' '}
-                        <code className="text-[11px]">download (1).jfif</code>, <code className="text-[11px]">download (2).jfif</code>, etc.
+                        Save stills into images/ as <code className="text-[11px]">download (1).jfif</code>,{' '}
+                        <code className="text-[11px]">download (2).jfif</code>, <code className="text-[11px]">download (3).jfif</code>, etc. (scene number = number in parentheses)
                       </p>
                       <button
                         type="button"

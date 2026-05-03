@@ -49,6 +49,11 @@ _CLUSTER_THRESHOLD = 1           # redistribute any suspicious short run
 _SUBTITLE_SNAP_ONLY_IF_MAX_GAP_SEC = 0.55
 SUBTITLE_ONSET_EARLY_THRESHOLD_MS = 100.0
 SUBTITLE_ONSET_TARGET_MARGIN_MS = 50.0
+# Localized subtitle fixes (no global offset)
+LARGE_SILENCE_INTER_SEGMENT_GAP_SEC = 3.0
+FAST_SPEECH_WPS_THRESHOLD = 3.2
+FAST_SPEECH_WINDOW_WORDS = 5
+FAST_SPEECH_EARLY_THRESHOLD_MS = 60.0
 
 
 def _sorted_word_starts(words: list) -> list[float]:
@@ -1467,6 +1472,94 @@ def _subtitle_delta_stats_ms(deltas_sec: list[float]) -> dict:
     }
 
 
+def _map_align_word_indices_to_kw_indices(
+    align_words: list[dict], kw_words: list[dict]
+) -> dict[int, int]:
+    """Map load_alignment word index → prepare_karaoke word index (same stream order)."""
+    m: dict[int, int] = {}
+    j = 0
+    for i, aw in enumerate(align_words):
+        ast = float(aw.get("start", 0) or 0)
+        while j < len(kw_words) and float(kw_words[j].get("start", 0) or 0) < ast - 0.02:
+            j += 1
+        if j < len(kw_words) and abs(float(kw_words[j].get("start", 0) or 0) - ast) < 0.08:
+            m[i] = j
+            j += 1
+    return m
+
+
+def _build_large_silence_first_word_kw_indices(
+    project_dir: Path, audio_data: dict
+) -> tuple[set[int], int, list[dict]]:
+    """
+    Long silence between image segments: Whisper's first-word start after the gap may drift.
+    Returns karaoke word indices for those first words, boundary count, debug rows.
+    """
+    mj_path = project_dir / "mj_prompts.json"
+    if not mj_path.is_file():
+        return set(), 0, []
+    with open(mj_path, "r", encoding="utf-8") as f:
+        mj_data = json.load(f)
+    if not isinstance(mj_data, list) or not mj_data:
+        return set(), 0, []
+    align_words = load_alignment_word_list(audio_data.get("words") or [])
+    kw_words = prepare_karaoke_word_list(audio_data.get("words") or [])
+    if not align_words or not kw_words:
+        return set(), 0, []
+    audio_tokens = [_norm_karaoke_token(w.get("word", "")) for w in align_words]
+    spans = _build_global_line_word_index_map(mj_data, audio_tokens)
+    if not spans:
+        return set(), 0, []
+    idx_map = _map_align_word_indices_to_kw_indices(align_words, kw_words)
+    target_kw: set[int] = set()
+    detail: list[dict] = []
+    boundary_count = 0
+    for seg_i in range(1, len(spans)):
+        fi = int(spans[seg_i]["first_word_idx"])
+        li_prev = int(spans[seg_i - 1]["last_word_idx"])
+        prev_end = float(align_words[li_prev].get("end", 0) or 0)
+        cur_start = float(align_words[fi].get("start", 0) or 0)
+        gap = cur_start - prev_end
+        if gap > LARGE_SILENCE_INTER_SEGMENT_GAP_SEC:
+            boundary_count += 1
+            kw_i = idx_map.get(fi)
+            if kw_i is not None:
+                target_kw.add(kw_i)
+            detail.append(
+                {
+                    "segment_id_after": mj_data[seg_i].get("segment_id", seg_i + 1),
+                    "gap_sec": round(gap, 3),
+                    "first_align_word_idx": fi,
+                    "kw_idx": kw_i,
+                }
+            )
+    return target_kw, boundary_count, detail
+
+
+def _build_fast_speech_kw_indices(kw_words: list[dict]) -> tuple[set[int], int]:
+    """Windows of FAST_SPEECH_WINDOW_WORDS consecutive words with local wps > FAST_SPEECH_WPS_THRESHOLD."""
+    n = len(kw_words)
+    win = FAST_SPEECH_WINDOW_WORDS
+    if n < win:
+        return set(), 0
+    window_starts: list[int] = []
+    fast: set[int] = set()
+    for i in range(0, n - win + 1):
+        w0 = kw_words[i]
+        w4 = kw_words[i + win - 1]
+        t0 = float(w0.get("start", 0) or 0)
+        t4 = float(w4.get("end", w4.get("start", 0)) or 0)
+        dur = t4 - t0
+        if dur <= 0:
+            continue
+        wps = win / dur
+        if wps > FAST_SPEECH_WPS_THRESHOLD:
+            window_starts.append(i)
+            for j in range(i, i + win):
+                fast.add(j)
+    return fast, len(window_starts)
+
+
 def apply_adaptive_subtitle_word_onset_correction(
     lines: list[dict],
     audio_path: Path,
@@ -1474,12 +1567,14 @@ def apply_adaptive_subtitle_word_onset_correction(
     threshold_ms: float = SUBTITLE_ONSET_EARLY_THRESHOLD_MS,
     target_margin_ms: float = SUBTITLE_ONSET_TARGET_MARGIN_MS,
     max_lines_for_measure: int | None = None,
+    project_dir: Path | None = None,
+    audio_data: dict | None = None,
 ) -> tuple[list[dict], dict]:
     """
-    Adaptive per-word subtitle correction:
-    - Measure waveform onset near each word start (first N lines for speed).
-    - If delta > threshold, shift that word forward by (delta - target_margin).
-    - If detector is not robust, apply zero correction for that word.
+    Adaptive per-word subtitle correction (localized only):
+    - Default: robust onset + Whisper early by > threshold_ms → shift by (delta - target_margin).
+    - Fix 1: large inter-segment silence → first word after gap uses waveform onset when robust.
+    - Fix 2: fast speech → use FAST_SPEECH_EARLY_THRESHOLD_MS (60ms) instead of 100ms for those words.
     """
     try:
         sampled = lines if max_lines_for_measure is None else lines[: max(1, int(max_lines_for_measure))]
@@ -1489,6 +1584,18 @@ def apply_adaptive_subtitle_word_onset_correction(
                 sampled_words.append((li, wi))
         if not sampled_words:
             return lines, {"reason": "no_words", "before_ms": _subtitle_delta_stats_ms([]), "after_ms": _subtitle_delta_stats_ms([])}
+
+        fix1_kw: set[int] = set()
+        fix1_boundary_count = 0
+        fix1_detail: list[dict] = []
+        fix2_kw: set[int] = set()
+        fix2_window_count = 0
+        if project_dir is not None and audio_data is not None:
+            fix1_kw, fix1_boundary_count, fix1_detail = _build_large_silence_first_word_kw_indices(
+                project_dir, audio_data
+            )
+            kw_for_fast = prepare_karaoke_word_list(audio_data.get("words") or [])
+            fix2_kw, fix2_window_count = _build_fast_speech_kw_indices(kw_for_fast)
 
         probe_end = 0.0
         for li, wi in sampled_words:
@@ -1509,31 +1616,66 @@ def apply_adaptive_subtitle_word_onset_correction(
             out[i] = {**line, "words": [dict(w) for w in (line.get("words") or [])]}
 
         threshold_sec = max(0.0, float(threshold_ms) / 1000.0)
+        fast_threshold_sec = max(0.0, float(FAST_SPEECH_EARLY_THRESHOLD_MS) / 1000.0)
         target_sec = max(0.0, float(target_margin_ms) / 1000.0)
+
         before_deltas: list[float] = []
         after_deltas: list[float] = []
+        before_fix1: list[float] = []
+        after_fix1: list[float] = []
+        before_fix2_only: list[float] = []
+        after_fix2_only: list[float] = []
+        before_other: list[float] = []
+        after_other: list[float] = []
+
         corrected_words = 0
         robust_words = 0
+        fix1_onset_applied = 0
+        fix2_threshold_corrections = 0
 
+        gidx = -1
         for li, wi in sampled_words:
             words = out[li].get("words") or []
             if wi >= len(words):
                 continue
+            gidx += 1
             w = words[wi]
             ws = float(w.get("start", 0) or 0)
             we = float(w.get("end", ws) or ws)
             aud, robust = _detect_word_onset_sec(rms, sr, ws)
-            delta = aud - ws
+            delta = (aud - ws) if robust else 0.0
             before_deltas.append(delta if robust else 0.0)
-            shift = 0.0
+
+            in_fix1 = gidx in fix1_kw
+            in_fix2_only = (gidx in fix2_kw) and not in_fix1
+            if in_fix1:
+                before_fix1.append(delta if robust else 0.0)
+            elif in_fix2_only:
+                before_fix2_only.append(delta if robust else 0.0)
+            else:
+                before_other.append(delta if robust else 0.0)
+
+            nws = ws
+            nwe = we
+            applied_fix1 = False
             if robust:
                 robust_words += 1
-                if delta > threshold_sec:
-                    shift = max(0.0, delta - target_sec)
-                    corrected_words += 1
-            nws = ws + shift
-            nwe = we + shift
-            # Keep word validity local to this line.
+                if in_fix1:
+                    # Replace Whisper start with audible onset when detector is robust.
+                    nws = aud
+                    nwe = we + (aud - ws)
+                    applied_fix1 = True
+                    fix1_onset_applied += 1
+                if not applied_fix1:
+                    thr = fast_threshold_sec if in_fix2_only else threshold_sec
+                    if delta > thr:
+                        shift = max(0.0, delta - target_sec)
+                        nws = ws + shift
+                        nwe = we + shift
+                        corrected_words += 1
+                        if in_fix2_only:
+                            fix2_threshold_corrections += 1
+
             if wi + 1 < len(words):
                 next_start = float(words[wi + 1].get("start", nwe) or nwe)
                 nwe = min(nwe, next_start - 0.001)
@@ -1541,21 +1683,45 @@ def apply_adaptive_subtitle_word_onset_correction(
                 nwe = nws + 0.03
             w["start"] = round(nws, 3)
             w["end"] = round(nwe, 3)
-            after_deltas.append((aud - nws) if robust else 0.0)
 
-        # Recompute cue bounds from corrected words without warping words.
+            res_after = (aud - nws) if robust else 0.0
+            after_deltas.append(res_after)
+            if in_fix1:
+                after_fix1.append(res_after)
+            elif in_fix2_only:
+                after_fix2_only.append(res_after)
+            else:
+                after_other.append(res_after)
+
         out = _stabilize_subtitle_lines(out)
         report = {
             "threshold_ms": float(threshold_ms),
+            "fast_speech_threshold_ms": float(FAST_SPEECH_EARLY_THRESHOLD_MS),
             "target_margin_ms": float(target_margin_ms),
+            "large_silence_gap_sec": float(LARGE_SILENCE_INTER_SEGMENT_GAP_SEC),
+            "fast_speech_wps_threshold": float(FAST_SPEECH_WPS_THRESHOLD),
+            "fast_speech_window_words": int(FAST_SPEECH_WINDOW_WORDS),
             "sampled_lines": len(sampled),
             "sampled_words": len(sampled_words),
             "total_words_processed": len(sampled_words),
             "robust_words": robust_words,
             "corrected_words": corrected_words,
-            "unchanged_words": max(0, len(sampled_words) - corrected_words),
+            "fix1_segment_boundaries_gt_cap": fix1_boundary_count,
+            "fix1_first_words_targeted": len(fix1_kw),
+            "fix1_waveform_onset_applied": fix1_onset_applied,
+            "fix1_detail": fix1_detail[:24],
+            "fix2_window_count": fix2_window_count,
+            "fix2_words_in_fast_windows": len(fix2_kw),
+            "fix2_threshold_corrections": fix2_threshold_corrections,
+            "unchanged_words": max(0, len(sampled_words) - corrected_words - fix1_onset_applied),
             "before_ms": _subtitle_delta_stats_ms(before_deltas),
             "after_ms": _subtitle_delta_stats_ms(after_deltas),
+            "before_ms_fix1_words": _subtitle_delta_stats_ms(before_fix1),
+            "after_ms_fix1_words": _subtitle_delta_stats_ms(after_fix1),
+            "before_ms_fix2_only_words": _subtitle_delta_stats_ms(before_fix2_only),
+            "after_ms_fix2_only_words": _subtitle_delta_stats_ms(after_fix2_only),
+            "before_ms_other_words": _subtitle_delta_stats_ms(before_other),
+            "after_ms_other_words": _subtitle_delta_stats_ms(after_other),
         }
         return out, report
     except Exception as e:

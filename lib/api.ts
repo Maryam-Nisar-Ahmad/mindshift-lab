@@ -137,9 +137,19 @@ export async function cleanScript(_id: string, script: string) {
   return data;
 }
 
-export async function generatePrompts(id: string) {
-  const res = await fetch(`${API}/api/projects/${pid(id)}/generate-prompts`, {
+export async function generatePrompts(id: string, useVisualCues = false) {
+  const url = `${API}/api/projects/${pid(id)}/generate-prompts${useVisualCues ? '?use_visual_cues=true' : ''}`;
+  const res = await fetch(url, { method: "POST" });
+  const data = await res.json();
+  if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
+  return data;
+}
+
+export async function saveMasterScript(id: string, script: string) {
+  const res = await fetch(`${API}/api/projects/${pid(id)}/script-master`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ script, is_cleaned: false }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error((data as { detail?: string }).detail || 'Request failed');
@@ -171,7 +181,7 @@ export async function checkImages(id: string) {
   return data;
 }
 
-/** Shift Grok download–named files in images/ to free a slot for a missing scene. */
+/** Shift Grok download–named files (download (1).jfif, …) in images/ to free a slot for a missing scene. */
 export async function insertGrokImageSlot(
   id: string,
   segment_id: number

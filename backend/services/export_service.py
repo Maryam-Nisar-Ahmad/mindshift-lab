@@ -84,6 +84,9 @@ def build_and_export(project_id, project_dir, editor_state, job_status):
         offset_sec = float(editor_state.get("subtitle_offset_ms", 0) or 0) / 1000.0
         shifted_subs = _shift_subtitle_lines(subtitles, offset_sec) if subtitles else []
 
+        raw_burn = editor_state.get("include_subtitles_in_export_video", True)
+        include_subtitles_in_export_video = True if raw_burn is None else bool(raw_burn)
+
         if has_subtitles and subtitles:
             qc_ok, qc_errs = validate_subtitle_lines(shifted_subs)
             if not qc_ok:
@@ -247,7 +250,7 @@ def build_and_export(project_id, project_dir, editor_state, job_status):
         final_video = f"[{prev_label}]" if n_images > 1 else "[v0]"
 
         output_path = project_dir / "output.mp4"
-        if ass_path is not None and ass_path.exists():
+        if ass_path is not None and ass_path.exists() and include_subtitles_in_export_video:
             filter_parts.append(f"[{prev_label}]ass=subtitles.ass[vout]")
             final_video = "[vout]"
 

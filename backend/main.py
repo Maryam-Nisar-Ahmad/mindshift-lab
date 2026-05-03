@@ -451,6 +451,17 @@ def save_script(id: str, body: ScriptBody):
     return {"ok": True}
 
 
+@app.post("/api/projects/{id}/script-master")
+def save_master_script(id: str, body: ScriptBody):
+    """Save the full Claude-formatted master script (with visual cues) as script_master.txt.
+    This file is used by DeepSeek for richer image prompt context when use_visual_cues is enabled.
+    It never touches script.txt — the clean narration used for audio alignment is unaffected."""
+    project_dir = get_project_dir(id)
+    with open(project_dir / "script_master.txt", "w", encoding="utf-8") as f:
+        f.write(body.script)
+    return {"ok": True}
+
+
 @app.post("/api/clean-script")
 async def clean_script_global(body: CleanScriptBody):
     """Body-only cleaning (no project id in URL) — avoids fetch failures from encoded path segments."""
@@ -464,14 +475,17 @@ async def clean_script_route(id: str, body: CleanScriptBody):
     return {"cleaned_script": cleaned_script}
 
 
-def _run_generate_prompts(project_id: str, script_text: str, job_id: str, image_provider: str):
+def _run_generate_prompts(project_id: str, script_text: str, job_id: str, image_provider: str, use_visual_cues: bool = False):
     job_status: dict = {"status": "pending", "percent": 0}
     job_put(job_id, job_status)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
+        project_dir = get_project_dir(project_id)
+        master_path = project_dir / "script_master.txt"
+        effective_master = master_path if (use_visual_cues and master_path.exists()) else None
         results = loop.run_until_complete(
-            generate_mj_prompts(project_id, script_text, job_status, image_provider=image_provider, job_id=job_id)
+            generate_mj_prompts(project_id, script_text, job_status, image_provider=image_provider, job_id=job_id, master_script_path=effective_master)
         )
         project_dir = get_project_dir(project_id)
         with open(project_dir / "mj_prompts.json", "w", encoding="utf-8") as f:
@@ -491,7 +505,7 @@ def _run_generate_prompts(project_id: str, script_text: str, job_id: str, image_
 
 
 @app.post("/api/projects/{id}/generate-prompts")
-def generate_prompts(id: str, background_tasks: BackgroundTasks):
+def generate_prompts(id: str, background_tasks: BackgroundTasks, use_visual_cues: bool = False):
     project_dir = get_project_dir(id)
     script_path = project_dir / "script.txt"
     if not script_path.exists():
@@ -504,7 +518,7 @@ def generate_prompts(id: str, background_tasks: BackgroundTasks):
     ip = str(meta_pm.get("image_provider", "midjourney")).lower()
     if ip not in ("midjourney", "grok"):
         ip = "midjourney"
-    background_tasks.add_task(_run_generate_prompts, id, script_text, job_id, ip)
+    background_tasks.add_task(_run_generate_prompts, id, script_text, job_id, ip, use_visual_cues)
     return {"job_id": job_id}
 
 
@@ -704,8 +718,9 @@ class InsertGrokImageSlotBody(BaseModel):
 @app.post("/api/projects/{id}/images/insert-grok-slot")
 def insert_grok_image_filename_slot(id: str, body: InsertGrokImageSlotBody):
     """
-    Shift Grok download–named files (download.jfif, download (1).jfif, …) in images/
+    Shift Grok download–named files (download (1).jfif, download (2).jfif, …) in images/
     so there is a free filename for the given scene. Does not change numbered 1.png style files.
+    Folders that still use a bare download.* for scene 1 are detected and handled for compatibility.
     """
     if body.segment_id < 1:
         raise HTTPException(status_code=400, detail="segment_id must be >= 1")
@@ -839,6 +854,8 @@ def assemble(id: str):
             project_dir / "audio.mp3",
             threshold_ms=SUBTITLE_ONSET_EARLY_THRESHOLD_MS,
             target_margin_ms=SUBTITLE_ONSET_TARGET_MARGIN_MS,
+            project_dir=project_dir,
+            audio_data=audio_data,
         )
 
         existing_state["segments"] = continuous_segments

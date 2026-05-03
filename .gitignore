@@ -49,3 +49,8 @@ next-env.d.ts
 
 # Per-project video/audio assets (local only; can exceed GitHub 100MB limit)
 /videos/
+
+# Backend video workspace: keep folders only (.gitkeep), never commit assets
+/backend/videos/**
+!/backend/videos/**/
+!/backend/videos/**/.gitkeep
