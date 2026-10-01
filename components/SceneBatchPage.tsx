@@ -300,7 +300,7 @@ export default function SceneBatchPage({ prompts, projectId, onRegenerate, promp
         </span>
         : copy each line into your image tool. Save files in sequence as download (1).jfif, download (2).jfif, download (3).jfif, … (scene number = number in parentheses) into:
         <br />
-        D:/Goal/MindShift-Lab/frontend/videos/{projectId}/images/
+        backend/videos/{projectId}/images/
       </div>
 
       <button

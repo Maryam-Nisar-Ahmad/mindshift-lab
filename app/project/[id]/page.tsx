@@ -1256,7 +1256,7 @@ export default function ProjectPage() {
                       <p className="mt-4" style={{ color: 'var(--garden-text-soft)' }}>
                         Save your audio file here:
                       </p>
-                      <p className="mt-1 font-mono text-sm" style={{ color: 'var(--garden-accent)' }}>D:/Goal/MindShift-Lab/frontend/videos/{id}/audio.mp3</p>
+                      <p className="mt-1 font-mono text-sm" style={{ color: 'var(--garden-accent)' }}>backend/videos/{id}/audio.mp3</p>
                       <button
                         type="button"
                         className="mt-3 rounded px-3 py-1.5 text-sm font-medium"

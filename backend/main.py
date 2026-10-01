@@ -211,8 +211,8 @@ class PipelineSettingsBody(BaseModel):
 
 @app.get("/ping-file")
 def ping_file():
-    """Test route: serve the known file directly."""
-    return FileResponse(r"D:\Goal\MindShift-Lab\videos\sleep\images\1.png")
+    """Test route: serve a known file directly."""
+    return FileResponse(VIDEOS_DIR / "sleep" / "images" / "1.png")
 
 
 @app.get("/api/projects")
