@@ -27,6 +27,8 @@
 # Python
 __pycache__/
 *.py[cod]
+.venv/
+venv/
 
 # Local job DB (SQLite)
 /backend/data/
