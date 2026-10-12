@@ -9,7 +9,7 @@ repeating the same framing. Each output should include a short one-line
 "target image" description to help pick the best generated result.
 
 [This is a placeholder. The real prompt defines fixed recurring characters
-with specific appearance anchors, plus pacing rules for when to insert
-visual "pattern interrupt" shots — both are kept private. Replace this file
-with your own scene-generation rules, or drop a private version at
-prompts/grok_scene_system.txt (gitignored).]
+with specific appearance anchors, plus pacing rules for when to insert a
+deliberately jarring, tonally-contrasting shot — both are kept private.
+Replace this file with your own scene-generation rules, or drop a private
+version at prompts/grok_scene_system.txt (gitignored).]
