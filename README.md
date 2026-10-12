@@ -50,6 +50,13 @@ Another `next dev` is still running, or a previous run left a stale lock.
 2. Remove the stale lock (safe if no dev server is running): `npm run dev:unlock`
 3. If it still fails, delete `.next` entirely (slower next start, but fixes stuck state) and run `npm run dev` again.
 
+## Prompts
+
+The actual channel strategy, scriptwriting, and image-prompt text used to run this
+pipeline are private and not included in this repo. `prompts.example/` ships generic
+placeholders in their place so the app runs out of the box; drop your own private
+versions into a local `prompts/` folder (gitignored) to use real ones.
+
 ## Tech stack
 
 Next.js 16 frontend · FastAPI backend · faster-whisper / WhisperX for transcription & forced alignment · ffmpeg for assembly · DeepSeek / OpenAI for script, prompt, and SEO generation.
