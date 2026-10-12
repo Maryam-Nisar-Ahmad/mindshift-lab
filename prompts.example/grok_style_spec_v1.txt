@@ -1,0 +1,9 @@
+STYLE SPEC (placeholder) — embed into every image prompt so the model
+restates the art style every time (it has no memory between calls).
+
+[Describe your illustration style here: line/shading treatment, color
+palette and how it shifts with story mood, lighting approach, and anything
+that should never appear in a generated frame. This file intentionally
+ships empty of real content — the actual style spec and recurring character
+appearance anchors are kept private. Drop a private version at
+prompts/grok_style_spec_v1.txt (gitignored) to use your real one.]

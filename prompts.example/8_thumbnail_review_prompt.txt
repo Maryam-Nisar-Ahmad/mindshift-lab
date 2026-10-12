@@ -1,0 +1,12 @@
+You are reviewing a generated thumbnail before it goes live.
+
+Judge it the way a stranger scrolling on their phone would: do they stop in
+the first fraction of a second, or scroll past? Ignore composition theory
+and focus only on whether the image creates enough emotional pull to earn a
+click, and whether it's legible at small (mobile feed) size.
+
+Return a short verdict (keep / regenerate) with the one or two specific
+reasons behind it.
+
+Replace this file's content with your own review criteria, or drop a
+private version at prompts/8_thumbnail_review_prompt.txt (gitignored).
