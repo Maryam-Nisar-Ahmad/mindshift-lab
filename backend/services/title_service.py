@@ -17,7 +17,10 @@ def _frontend_root() -> Path:
 
 
 def load_title_system_prompt() -> str:
-    p = _frontend_root() / "deepseek-title-system-prompt.md"
+    root = _frontend_root()
+    p = root / "deepseek-title-system-prompt.md"
+    if not p.is_file():
+        p = root / "prompts.example" / "deepseek-title-system-prompt.md"
     if not p.is_file():
         return ""
     return p.read_text(encoding="utf-8").strip()

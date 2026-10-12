@@ -22,12 +22,28 @@ def _frontend_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
+def _load_text(filename: str) -> str:
+    """Private prompt file if present (gitignored), else its prompts.example/
+    fallback, else empty string."""
+    root = _frontend_root()
+    private_path = root / "prompts" / filename
+    if private_path.is_file():
+        return private_path.read_text(encoding="utf-8")
+    example_path = root / "prompts.example" / filename
+    if example_path.is_file():
+        return example_path.read_text(encoding="utf-8")
+    return ""
+
+
 def load_thumbnail_system_prompt() -> str:
     root = _frontend_root()
     for name in ("thumbnail-system-prompt.md", "deepseek-thumbnail-system-prompt.md"):
         p = root / name
         if p.is_file():
             return p.read_text(encoding="utf-8").strip()
+    example = root / "prompts.example" / "thumbnail-system-prompt.md"
+    if example.is_file():
+        return example.read_text(encoding="utf-8").strip()
     return ""
 
 
@@ -116,28 +132,7 @@ async def generate_three_thumbnail_prompts(
     user = (
         f"VIDEO TITLE:\n{title}\n\n"
         f"SCRIPT (read carefully — extract: the single most counterintuitive claim, the viewer's exact pain state, what 'trap' the viewer is in, what named concept the video teaches):\n{script_excerpt[:12000]}\n\n"
-        "TASK: Generate THREE thumbnail prompts for Grok, each targeting a different emotional entry point.\n\n"
-        "BEFORE WRITING: Identify (a) the single most counterintuitive claim in the script, "
-        "(b) the TRAP name for what the viewer is unknowingly doing wrong, "
-        "(c) a coined specific concept name that could be the mechanism the video explains.\n\n"
-        "Variant A — PAIN MIRROR: Bold illustrated character portrait. [CHARACTER_B] (exhausted/frustrated) or [CHARACTER_A] (overwhelmed). "
-        "EXTREME cartoonish expression — physical body-level descriptors, not 'slightly' anything. "
-        "CRITICAL: your grok_prompt MUST include 'flat 2D editorial illustration, thick ink outlines, NOT 3D render, NOT CGI, NOT photorealistic' — Grok defaults to 3D video game art style without this explicit instruction. "
-        "Text: maximum 3 words from the TRAP or PARADOX formula. "
-        "ONE key word in contrasting colour. Background dark (deep navy/charcoal/crimson with hex code).\n\n"
-        "Variant B — NAMED CONCEPT/[REDACTED CONCEPT]: Typographic-dominant — text fills 50-65% of frame. "
-        "ONE simple iconic illustration (NOT a face). No close-up character portrait. "
-        "Like After Skool's 'THE BEGINNING IS NEAR' or Nischa's 'BORING BUT RICH' or 'STOP BUYING THIS'. "
-        "Use the counterintuitive claim or coined concept name from the script. "
-        "ONE key word in contrasting colour or underlined.\n\n"
-        "Variant C — SCENE/TRANSFORMATION: Illustrated conceptual scene OR [CHARACTER_A] character with different emotional angle. "
-        "MUST include a 2-3 word text overlay derived from THIS script's specific concept — NEVER 'START NOW', 'ACT NOW', 'BEGIN TODAY', or any generic call-to-action. "
-        "Good text examples for scene variants: the named concept ('THE WAITING TRAP'), or a specific coined phrase ('QUIET ACTION'), or a script-specific paradox. "
-        "Consider: one figure clearly different from a sea of grey identical figures (proven 277K+ formula), "
-        "or [CHARACTER_A] (relieved/determined) with a short positive script-specific text, or a scene showing the literal mechanism of THIS script's trap. "
-        "Background warmer (teal/green/orange with hex code).\n\n"
-        "FINAL CHECK before returning JSON: verify that NONE of the three text overlays contain: 'START NOW', 'ACT NOW', 'DO IT NOW', 'BEGIN TODAY', 'TAKE ACTION', 'LEVEL UP', 'WIN AT LIFE', 'LASER FOCUS', 'WAKE UP CALL'. If any do, rewrite that text with a formula from the system instructions.\n"
-        "Return JSON only using the variants shape from the system instructions.\n"
+        + _load_text("thumbnail_variants_user_prompt.txt")
     )
 
     if provider == "openai":
