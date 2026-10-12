@@ -30,6 +30,10 @@ __pycache__/
 .venv/
 venv/
 
+# Private prompts (channel strategy, scripts, character/style IP) — see
+# prompts.example/ for generic placeholders that ship with the repo
+/prompts/
+
 # Local job DB (SQLite)
 /backend/data/
 

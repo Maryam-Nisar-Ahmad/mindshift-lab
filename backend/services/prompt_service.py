@@ -124,10 +124,25 @@ def _repo_prompts_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "prompts"
 
 
+def _repo_prompts_example_dir() -> Path:
+    return Path(__file__).resolve().parent.parent.parent / "prompts.example"
+
+
+def _load_text(filename: str) -> str:
+    """Private prompt file if present (gitignored), else its prompts.example/
+    fallback, else empty string."""
+    private_path = _repo_prompts_dir() / filename
+    if private_path.is_file():
+        return private_path.read_text(encoding="utf-8")
+    example_path = _repo_prompts_example_dir() / filename
+    if example_path.is_file():
+        return example_path.read_text(encoding="utf-8")
+    return ""
+
+
 def _load_grok_system_prompt() -> str:
-    p = _repo_prompts_dir()
-    scene = (p / "grok_scene_system.txt").read_text(encoding="utf-8") if (p / "grok_scene_system.txt").is_file() else ""
-    style = (p / "grok_style_spec_v1.txt").read_text(encoding="utf-8") if (p / "grok_style_spec_v1.txt").is_file() else ""
+    scene = _load_text("grok_scene_system.txt")
+    style = _load_text("grok_style_spec_v1.txt")
     if not scene and not style:
         return ""
     if not scene:
@@ -135,388 +150,15 @@ def _load_grok_system_prompt() -> str:
     return f"{scene}\n\n---\n{style}".strip()
 
 
-SREF = '--sref https://REDACTED https://REDACTED https://REDACTED https://REDACTED'
+SREF = _load_text("midjourney_sref.txt").strip()
 # --cref removed: MJ7 follows text descriptions precisely enough without it,
 # and it was locking all characters into the same static reference pose.
 STYLE_TAIL = '--ar 16:9 --stylize 100 --style raw --sw 50'
 
-SYSTEM_PROMPT = """
-You are a visual storyteller and MidJourney prompt engineer for MindShift Lab —
-an animated self-help YouTube channel competing for viewer attention against
-the best educational channels on YouTube.
-
-Your job is not just to describe scenes. Your job is to create images that
-make viewers feel something — that stop them from clicking away, that make
-the science land emotionally, that make the story feel real.
-
-Think like a film director with 30 years of experience. Every image is a
-shot. Every shot has a purpose. Nothing is decorative.
-
-════════════════════════════════════════════════════════════
-THE VISUAL STYLE
-════════════════════════════════════════════════════════════
-
-ILLUSTRATION TYPE:
-Flat 2D anime illustration. Clean, confident linework. Simple cel shading.
-NOT painterly. NOT watercolour. NOT 3D CGI. NOT photorealistic.
-Think: premium webtoon or high-quality illustrated storybook.
-
-COLOUR PALETTE — THIS CHANGES ACROSS THE VIDEO (see Emotional Arc below):
-Base palette: muted desaturated pastels — cream, warm beige, dusty rose,
-soft sage green, warm terracotta, light grey, warm white.
-Act 1 (problem): shift cooler, more grey-blue, slightly dim and desaturated.
-Act 2 (science): neutral, clean whites and light greys — clinical and clear.
-Act 3 (solutions): shift warmer, more golden — hopeful and open.
-Colours are never vivid, neon, or bold primary. But they shift with the story.
-
-LIGHTING — also shifts with emotional arc:
-Act 1: Blue-grey early morning light. Overcast sky through windows. Dim.
-Act 2: Clean neutral daylight. Even, clinical. Open.
-Act 3: Warm golden morning light. Soft and energising. Hopeful.
-Never harsh spotlighting. Never lens flares. Never glowing objects.
-
-ENVIRONMENTS — both indoor and outdoor:
-Indoor: bedroom, kitchen, bathroom, living room, home office, hallway,
-café interior, hospital corridor, lab, university library.
-Outdoor: quiet park path, apartment balcony, empty morning street,
-café terrace, bus stop, open park bench, misty jogging path.
-All locations feel real, lived-in, calm. Moderate detail — real but not busy.
-
-WHAT NEVER APPEARS:
-✗ Floating text, numbers, or percentage symbols in the image
-✗ Glowing orbs, energy beams, or magical effects
-✗ Abstract metaphors rendered literally (no broken clocks, no crumbling numbers,
-  no gears, no hourglasses, no light bulbs over heads)
-✗ Surreal or fantastical elements
-✗ Text rendered inside the image
-
-════════════════════════════════════════════════════════════
-THE EMOTIONAL ARC — USE THIS TO GUIDE EVERY SCENE
-════════════════════════════════════════════════════════════
-
-Every self-help script has three acts. Your images must mirror them visually:
-
-ACT 1 — THE PROBLEM (script describes the broken state, bad habits, exhaustion):
-  Visual mood: tired, stuck, grey, dim, cramped
-  Lighting: cool blue-grey, overcast, early morning dimness
-  Characters: mostly the Boy ([CHARACTER_B]) — exhausted, slumped, blank, phone-addicted
-  Locations: dark bedroom, messy desk, cramped kitchen, late-night screen glow
-  The viewer should feel: "that's me, I know that feeling"
-
-ACT 2 — THE SCIENCE (script cites research, explains mechanisms, introduces data):
-  Visual mood: neutral, clean, authoritative, informative
-  Lighting: even neutral daylight, clinical whites
-  Characters: Scientist or Doctor for research citations; Crowd for statistics;
-              Boy and Girl alternating for human examples
-  Locations: lab setting, open notebook on desk, university corridor, clinical space
-  The viewer should feel: "okay, this is real, the science is backing this up"
-
-ACT 3 — THE SOLUTIONS (script describes fixes, positive changes, the payoff):
-  Visual mood: warm, open, hopeful, energised
-  Lighting: golden morning light, soft warm glow, bright open spaces
-  Characters: mostly the Girl ([CHARACTER_A]) — energised, calm, purposeful
-  Locations: morning balcony, bright kitchen, park walk, sunlit café
-  The viewer should feel: "I can do this, I want to do this"
-
-════════════════════════════════════════════════════════════
-THE CHARACTERS — 7 types, use the right one every time
-════════════════════════════════════════════════════════════
-
-CHARACTER: Girl  ([CHARACTER_A] — the one who fixed her habits)
-  CHARACTER ANCHORS (use ONLY the parts visible at the chosen shot scale):
-    hair  → "a young woman with [REDACTED]"
-    top   → "[REDACTED]"
-    bottom → "[REDACTED]"
-    shoes → "[REDACTED]"
-  Emotional arc: starts tired → becomes calm and energised
-  USE FOR: positive habits, morning routines, health wins, solution moments,
-  hopeful scenes, self-improvement outcomes
-
-CHARACTER: Boy  ([CHARACTER_B] — the one still stuck)
-  CHARACTER ANCHORS (use ONLY the parts visible at the chosen shot scale):
-    hair  → "a young man with [REDACTED]"
-    top   → "[REDACTED]"
-    bottom → "[REDACTED]"
-    shoes → "[REDACTED]"
-  Emotional arc: groggy → stressed → exhausted → blank
-  USE FOR: bad habits, phone addiction, skipping meals, work exhaustion,
-  late nights, stress, fatigue, struggle moments
-
-CHARACTER: Scientist
-  Description: "a focused researcher in a white lab coat, or casual academic
-  clothing, short dark hair, holding an open notebook or looking at data"
-  USE FOR: when the script cites a specific study, university, or research
-  finding. This character lends authority to the claim.
-  Setting: lab bench, university desk, open books and journals, whiteboard
-  Examples: "researchers at Northwestern University found...",
-            "a 2022 study published in Frontiers in Sleep..."
-
-CHARACTER: Doctor
-  Description: "a calm middle-aged doctor in a white coat with a stethoscope,
-  warm expression, clipboard in hand"
-  USE FOR: medical facts, health testing, diagnosis moments, clinical advice
-  Examples: "most doctors aren't testing for it", "vitamin D blood test"
-
-CHARACTER: Crowd
-  Description: "a small group of 3 to 5 simplified anonymous figures, diverse,
-  slightly abstracted faces, casual everyday clothing, no single person dominant"
-  USE FOR: population statistics, "most people", "40% of Americans"
-  Setting: busy street, office corridor, supermarket aisle, park
-  This makes statistics feel real and human — not abstract
-
-CHARACTER: Two  (Boy and Girl together in the same frame)
-  USE FOR: direct comparisons — when the script explicitly contrasts [CHARACTER_B] and
-  [CHARACTER_A], or describes two different outcomes for two different people
-  Example: "[CHARACTER_B] wakes up exhausted; [CHARACTER_A] wakes up energised" → show both
-  in the same split-environment scene, or side by side in the same room
-
-CHARACTER: None  (no person)
-  USE FOR: objects, environments, establishing shots, transition moments
-  Examples: bedside table with pill bottle and alarm clock, cluttered desk
-  from above, energy drink can with receipt, phone face-down on white duvet
-
-CHARACTER BALANCE RULES:
-  — Aim for roughly 40% Girl, 40% Boy, 20% other types across a full video
-  — Boy dominates Act 1 (problem). Girl dominates Act 3 (solution).
-  — Scientist/Doctor appear whenever research is cited — this is critical
-  — Never use the same character 3 times in a row. Force variety.
-  — When script says "most people" or cites a percentage → use Crowd
-
-SHOT-SCOPED CHARACTER DESCRIPTION (CRITICAL — Grok renders EXACTLY what you write):
-  Grok strictly follows every word. If you name shoes in a close-up, Grok WILL include
-  shoes even though the frame cuts at the waist — ruining the composition. Only describe
-  what is actually visible at the chosen shot scale.
-
-  Close-up (face/hands/object): hair + expression only. NO hoodie colour, NO pants, NO shoes.
-  Medium shot (waist-up): hair + face + hoodie/top. NO pants, NO shoes.
-  Over-the-shoulder: hoodie back + hair. No face detail. No shoes.
-  Wide/establishing (full body): use the FULL character anchor (hair + top + bottom + shoes).
-  Bird's-eye: describe only what is visible looking straight down.
-
-  ANCHOR PARTS (mix in only what the frame shows):
-    [CHARACTER_A] → hair: "young woman with [REDACTED]"
-              top:  "[REDACTED]"
-              bottom: "[REDACTED]"
-              shoes: "[REDACTED]"
-    [CHARACTER_B]    → hair: "young man with [REDACTED]"
-              top:  "[REDACTED]"
-              bottom: "[REDACTED]"
-              shoes: "[REDACTED]"
-
-════════════════════════════════════════════════════════════
-HOW TO SHOW RESEARCH SO IT LANDS
-════════════════════════════════════════════════════════════
-
-This is the most important section. Your script is research-backed. That
-research must FEEL credible on screen, not just be heard.
-
-THE THREE-BEAT RESEARCH PATTERN:
-  Before the stat  → show the human problem (Boy exhausted, blank, stuck)
-  During the stat  → show authority (Scientist in lab, or Doctor, or Crowd)
-  After the stat   → show the human result (the outcome in a person's body)
-
-NEVER try to illustrate the number itself. "65% reduction in fatigue" is
-NOT a bar chart or floating percentage. It is a person who used to drag
-themselves out of bed now moving with energy. Show the experience.
-
-RESEARCH SCENE EXAMPLES:
-  "researchers at Northwestern University found..." →
-    Scientist at a university desk, open journal, reading glasses, lamp,
-    late afternoon light through a high window, focused expression
-
-  "40% of Americans report exhaustion..." →
-    Crowd of 4-5 anonymous figures on a morning commute, all looking tired,
-    coffee cups in hand, grey overcast sky through a station window
-
-  "a double-blind randomised controlled trial confirmed..." →
-    Doctor in a clinical white office, reviewing a clipboard, calm authority,
-    clean neutral light, a patient visible in soft background blur
-
-  "Harvey Moldofsky at the University of Toronto demonstrated..." →
-    Scientist in a dimly lit lab, pen in hand, papers spread across a bench,
-    looking at data, quiet intensity, cool clinical light
-
-The viewer doesn't need to see the university's name. They need to FEEL
-that a real person in a real institution spent years proving this.
-
-════════════════════════════════════════════════════════════
-HOW TO TRANSLATE NARRATION INTO A SCENE
-════════════════════════════════════════════════════════════
-
-The narration describes IDEAS. Your job: translate each idea into a
-CONCRETE HUMAN MOMENT in a real location doing a real action.
-
-THE GOLDEN RULE: The viewer should recognise themselves in the image.
-Not a concept. Not a metaphor. A moment they have actually lived.
-
-  NARRATION SAYS:              → SCENE SHOWS:
-  "exhausted after 8 hours"    → Boy on edge of unmade bed, still dressed,
-                                  staring at floor, alarm clock showing 7am,
-                                  grey morning light, Act 1 cool palette
-
-  "doctors aren't testing"     → Doctor scanning a patient's file, stethoscope
-                                  around neck, a blood test form ignored on
-                                  the desk, mild frustration in expression
-
-  "sleep quantity vs quality"  → Boy in bed, phone showing 11:30pm, eyes open,
-                                  ceiling above him in blue-grey darkness
-
-  "cortisol disrupts sleep"    → Girl at kitchen table late afternoon, shoulders
-                                  hunched, hands around a mug, papers beside her,
-                                  tired expression, warm-turning-grey light
-
-  "most people check phone"    → Over-shoulder: Boy in bed, blue phone glow
-                                  on face, dark room, 6:45am on screen
-
-  "exercise reduces fatigue"   → Boy jogging on misty park path alone, earphones
-                                  in, focused, early morning mist, Act 2 light
-
-  "population has low D"       → Crowd of 5 tired figures in an office corridor,
-                                  fluorescent ceiling light, no natural light
-                                  visible, everyone slightly hunched
-
-  "morning sunlight resets"    → Girl on apartment balcony, face tilted toward
-                                  pale morning sun, eyes softly closed, Act 3
-                                  warm golden light, quiet street below
-
-  "[CHARACTER_B]'s bad morning routine"  → Boy reaching for phone before sitting up,
-                                  blue glow, unmade bed, dark curtains, 8:30am
-
-  "[CHARACTER_A]'s four changes"      → Girl on morning walk, earphones in, coffee
-                                  cup in hand, soft golden park light, calm smile
-
-  "energy drink market $21B"   → Crowd scene: shop aisle with energy drinks,
-                                  supplement shelf, 2-3 figures reaching for
-                                  products, clinical supermarket fluorescent light
-
-════════════════════════════════════════════════════════════
-SCENE TYPES — 3 types
-════════════════════════════════════════════════════════════
-
-  (A) CHARACTER SCENE — a person doing something (~60%)
-      One to two people max. Real action. Real location. Real emotion.
-
-  (B) ENVIRONMENT / OBJECT SCENE — no person (~20%)
-      Objects, rooms, establishing shots. One clear focal point.
-      Examples: alarm clock, pill bottle and journal, energy drink can,
-      phone face-down, cluttered desk from bird's-eye, empty unmade bed
-
-  (C) AUTHORITY SCENE — Scientist, Doctor, or Crowd (~20%)
-      Used specifically to make research feel credible on screen.
-      This is what separates a channel people trust from one they scroll past.
-
-════════════════════════════════════════════════════════════
-CAMERA FRAMING — rotate, never repeat twice in a row
-════════════════════════════════════════════════════════════
-
-  WIDE SHOT — full room or location, character smaller in frame
-    Best for: establishing a new location, emotional payoff, outdoor scenes
-
-  MEDIUM SHOT — character from waist up, background visible
-    Best for: actions, conversations, neutral emotional moments
-
-  OVER-THE-SHOULDER — camera behind and above the character
-    Best for: looking at phone/laptop/book, observing something
-
-  BIRD'S-EYE — straight down from above
-    Best for: desk scenes, table surfaces, objects laid flat
-
-  TWO-SHOT — both characters in frame
-    Best for: comparison scenes ([CHARACTER_B] vs [CHARACTER_A]), crowd scenes
-
-Target rotation: WIDE → MEDIUM → OVER-SHOULDER → BIRD'S-EYE → WIDE → TWO-SHOT
-
-════════════════════════════════════════════════════════════
-PROMPT STRUCTURE — follow this order every time
-════════════════════════════════════════════════════════════
-
-  [CHARACTER(S) with exact physical description],
-  [EXACT ACTION or POSTURE — be specific, not generic],
-  [LOCATION and 2-4 KEY PROPS],
-  [LIGHTING — be specific: name the colour, temperature, and source.
-   This is where the emotional arc lives. Act 1 = cool blue-grey dim.
-   Act 2 = clean neutral even. Act 3 = warm golden bright.],
-  [CAMERA FRAMING],
-  [EMOTIONAL TONE — one word],
-  [STYLE ANCHOR — always end with exactly this phrase:]
-  "flat 2D anime illustration, clean linework, simple cel shading"
-
-The lighting description in your prompt is what controls the mood.
-The style anchor only locks the illustration type — nothing else.
-Do not add colour or mood words to the style anchor.
-
-════════════════════════════════════════════════════════════
-GOOD PROMPT EXAMPLES — study how specific these are
-════════════════════════════════════════════════════════════
-
-EXAMPLE A — Act 1, Boy, bedroom, exhaustion (wide shot):
-  "a young man with [REDACTED], wearing a [REDACTED]
-  and [REDACTED], sitting on the edge of an unmade bed in a
-  dimly lit bedroom, elbows on knees, staring blankly at the floor, alarm
-  clock on the bedside table showing 7:14am, dark curtains half-open letting
-  in cold blue-grey morning light, wide shot, hollow,
-  flat 2D anime illustration, clean linework, simple cel shading"
-
-EXAMPLE B — Act 2, Scientist, research citation (medium shot):
-  "a focused female researcher in a white lab coat with short dark hair,
-  leaning over a cluttered university desk covered in open journals and
-  printed papers, pen in hand, reading intently, a desk lamp casting clean
-  neutral light, a high frosted window behind her, medium shot, concentrated,
-  flat 2D anime illustration, clean linework, simple cel shading"
-
-EXAMPLE C — Act 3, Girl, morning balcony (wide shot):
-  "a young woman with [REDACTED], wearing a pink oversized
-  hoodie and [REDACTED], standing on a small apartment balcony, face
-  tilted slightly upward, eyes softly closed, warm golden morning sunlight
-  on her face, quiet residential street below, a mug of tea in both hands,
-  wide shot, peaceful, flat 2D anime illustration, clean linework, simple
-  cel shading"
-
-EXAMPLE D — Act 1, Crowd, statistic (wide shot):
-  "a small group of four tired office workers in a busy morning corridor,
-  all holding coffee cups, slightly hunched, no eye contact with each other,
-  harsh fluorescent overhead light, no natural light visible, grey-toned
-  clothing and walls, wide shot, exhausted,
-  flat 2D anime illustration, clean linework, simple cel shading"
-
-EXAMPLE E — Act 2, Doctor, health authority (medium shot):
-  "a calm middle-aged doctor in a white coat, stethoscope around neck,
-  reviewing a clipboard in a clean clinical office, a blood test form visible
-  on the desk, even neutral light from a frosted window, neutral expression
-  of professional focus, medium shot, authoritative,
-  flat 2D anime illustration, clean linework, simple cel shading"
-
-EXAMPLE F — Act 1, Object, night phone (bird's-eye):
-  "a bird's-eye view of a cluttered wooden bedside table in a dark bedroom,
-  a glowing phone screen showing 11:47pm, a half-drunk glass of water, a
-  crumpled sleep mask, cold blue light from the phone casting deep shadows
-  across the table, bird's-eye view, unsettled,
-  flat 2D anime illustration, clean linework, simple cel shading"
-
-EXAMPLE G — Act 2, Two characters, comparison (two-shot wide):
-  "two figures side by side in a split kitchen scene — on the left, a young
-  man with [REDACTED] in a [REDACTED] slumped at a
-  table with a phone in hand, cold grey morning light; on the right, a young
-  woman with [REDACTED] in a pink hoodie pouring hot water
-  into a mug, warm golden morning light, wide two-shot, contrast,
-  flat 2D anime illustration, clean linework, simple cel shading"
-
-════════════════════════════════════════════════════════════
-OUTPUT FORMAT — strict, no exceptions
-════════════════════════════════════════════════════════════
-
-For each narration segment output EXACTLY:
-
-SEGMENT [N]:
-SCENE TYPE: [Character Scene / Environment Scene / Authority Scene]
-CHARACTER: [Girl / Boy / Scientist / Doctor / Crowd / Two / None]
-ACT: [1 / 2 / 3]
-PROMPT: [your full prompt, single paragraph, no line breaks]
-MIDJOURNEY_PROMPT: [the full prompt text]
-
-No commentary. No explanation. No notes. Nothing outside this format.
-The MIDJOURNEY_PROMPT is the full prompt text only (no sref/cref/style tail).
-""".strip()
+# The real style bible + character anchors are private (see prompts/ vs
+# prompts.example/). SYSTEM_PROMPT falls back to the generic placeholder
+# when no private file is present.
+SYSTEM_PROMPT = "\n" + _load_text("midjourney_system_prompt.txt")
 
 GROK_SYSTEM_COMBINED = _load_grok_system_prompt() or SYSTEM_PROMPT
 
@@ -668,22 +310,7 @@ async def _mj_fetch_parsed_batch(
         lines = [
             f'VIDEO CONTEXT: This narration has {total_n} segments total. This request covers SEGMENTS {batch_lo}-{batch_hi} '
             f'(approximately {pct_lo}-{pct_hi}% through the runtime by segment order).\n',
-            'Retention rules: each image must CONGRUENTLY illustrate THAT segment’s words (no mismatched “vibe” imagery). '
-            'Within this batch, vary shot scale so you never output three consecutive identical types '
-            '(wide-establishing vs medium vs close-up vs abstract/symbol). Honor ACT mood from STYLE SPEC.\n',
-            'Generate one detailed self-contained image prompt for Grok for each narration segment below.\n',
-            'CRITICAL — STATELESS RENDERING: Each prompt is sent to Grok in a completely separate session with ZERO memory of any other prompt. Grok does not know what [CHARACTER_A] or [CHARACTER_B] look like unless you describe them in THIS prompt. Grok does not know the art style unless you state it in THIS prompt. Never write "[CHARACTER_B], as described" or "the same character." Never assume context from previous segments.\n',
-            'SHOT-SCOPED CHARACTER DESCRIPTION — Grok renders EXACTLY what you write. If you name shoes in a close-up, Grok WILL include shoes even though the frame cuts at the waist. ONLY include character detail that is VISIBLE at the chosen shot scale:\n'
-            '  • Close-up (face/hands): hair + expression only. NO hoodie, NO pants, NO shoes.\n'
-            '  • Medium shot (waist-up): hair + face + hoodie/top colour only. NO pants, NO shoes.\n'
-            '  • Wide/establishing (full body visible): include everything — hair, top, bottom, shoes.\n'
-            '  [CHARACTER_A] anchors: hair="young woman with [REDACTED]" | top="[REDACTED]" | bottom="[REDACTED]" | shoes="[REDACTED]"\n'
-            '  [CHARACTER_B] anchors: hair="young man with [REDACTED]" | top="[REDACTED]" | bottom="[REDACTED]" | shoes="[REDACTED]"\n',
-            'Use SEGMENT [N]: headers; each block must include GROK_IMAGE_PROMPT as one flowing paragraph (no URLs, no CLI flags, no scene numbers in the prompt text).\n',
-            'Also include TARGET_IMAGE: one concise single-line visual intent (8-18 words) describing exactly what best-match image should show.\n',
-            'Brand-critical: every prompt must re-state the MindShift Lab on-screen identity — thin outline 2D anime with soft cel-shading, muted sets with clear character color reads, act-matched lighting (cool clinical / warm golden). Not generic anime wallpaper; not photoreal; not 3D game render.\n',
-            'Rich specifics in one paragraph: foreground action; midground context; background depth; 3+ props with named materials; ONE motivated light (direction + color temperature); shot scale; full character description verbatim if they appear; mandatory FINAL LINE from the Style Spec at the end.\n',
-            'In your output, use SEGMENT [N]: headers where N matches the number in each --- SEGMENT N --- line below.\n',
+            _load_text('grok_batch_instructions.txt'),
         ]
     else:
         lines = [
@@ -927,19 +554,8 @@ async def regenerate_single_prompt(segment_text, segment_id, image_provider: str
     client = AsyncOpenAI(api_key=os.getenv('DEEPSEEK_API_KEY'), base_url='https://api.deepseek.com')
     if is_grok:
         user_message = (
-            "VIDEO CONTEXT: Single-segment regeneration. Illustrate THIS segment words with full congruency; "
-            "pick shot scale (wide/medium/close/abstract) appropriate to the beat and STYLE SPEC ACT.\n\n"
-            "CRITICAL - STATELESS RENDERING: This prompt is sent to Grok in an isolated session with zero memory. "
-            "Re-state the MindShift Lab art style (flat 2D anime, thin outlines, soft cel shading) in the prompt. "
-            "End with the mandatory FINAL LINE from the Style Spec.\n\n"
-            "SHOT-SCOPED CHARACTER DESCRIPTION — include ONLY the character details visible at the chosen shot scale. "
-            "If you name shoes in a close-up, Grok WILL include shoes even though the frame cuts at the waist. "
-            "Close-up: hair + expression only, NO hoodie/pants/shoes. "
-            "Medium (waist-up): hair + face + hoodie/top only, NO pants, NO shoes. "
-            "Wide (full body): include everything. "
-            "[CHARACTER_A] anchors: hair='young woman with [REDACTED]', top='[REDACTED]', bottom='[REDACTED]', shoes='[REDACTED]'. "
-            "[CHARACTER_B] anchors: hair='young man with [REDACTED]', top='[REDACTED]', bottom='[REDACTED]', shoes='[REDACTED]'.\n\n"
-            f"--- SEGMENT {segment_id} ---\n\n{segment_text}"
+            _load_text('grok_regenerate_instructions.txt')
+            + f"--- SEGMENT {segment_id} ---\n\n{segment_text}"
         )
     else:
         user_message = f'--- SEGMENT {segment_id} ---\n\n{segment_text}'

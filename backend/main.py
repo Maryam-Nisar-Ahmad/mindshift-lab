@@ -73,6 +73,7 @@ app.add_middleware(
 BASE_DIR = Path(__file__).resolve().parent
 VIDEOS_DIR = Path(__file__).parent.parent / 'videos'
 PROMPTS_DIR = Path(__file__).parent.parent / 'prompts'
+PROMPTS_EXAMPLE_DIR = Path(__file__).parent.parent / 'prompts.example'
 
 PROMPT_NAME_TO_FILE = {
     "1_channel_strategy": "1_channel_strategy.txt",
@@ -432,7 +433,11 @@ def get_prompt(name: str):
         raise HTTPException(status_code=404, detail="Unknown prompt")
     path = PROMPTS_DIR / filename
     if not path.is_file():
-        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+        # Private prompt not present (e.g. a fresh clone) — serve the
+        # generic placeholder from prompts.example/ instead.
+        path = PROMPTS_EXAMPLE_DIR / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {filename}")
     return {"content": path.read_text(encoding="utf-8")}
 
 
